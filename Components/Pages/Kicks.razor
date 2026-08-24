@@ -1,0 +1,236 @@
+@page "/kicks"
+@using Janani.Data
+@using Janani.Models
+@using Microsoft.EntityFrameworkCore
+@inject AppDbContext Db
+@inject CurrentUserService CurrentUser
+@rendermode InteractiveServer
+
+<PageTitle>Janani — Baby Kicks</PageTitle>
+
+<div class="bloom-container">
+    <div class="section-header">
+        <h1>@T("Title")</h1>
+        <p class="subtitle">
+            @T("Subtitle")
+        </p>
+    </div>
+
+    <div class="kick-card @(_kicks >= 10 ? "goal-reached" : "")">
+        <div class="kick-count-display">
+            <span class="kick-big" @key="_kicks">@_kicks</span>
+            <span class="kick-label">@T("KicksThisSession")</span>
+        </div>
+
+        @if (_kicks >= 10)
+        {
+            <div class="celebration">@T("Celebration")</div>
+        }
+
+        <button class="kick-btn" @onclick="RecordKick">
+            <span class="kick-emoji">🩷</span>
+            <span>@T("TapForEachKick")</span>
+        </button>
+
+        @if (_kicks > 0)
+        {
+            <p class="kick-time">@string.Format(T("StartedFormat"), _sessionStart?.ToString("HH:mm"), ElapsedMinutes)</p>
+        }
+
+        <div class="kick-message">
+            <p>@GetKickMessage()</p>
+        </div>
+
+        @if (_kicks > 0)
+        {
+            <div class="kick-actions">
+                <button class="bloom-btn primary" @onclick="SaveSessionAsync">
+                    @T("SaveSession")
+                </button>
+                <button class="bloom-btn secondary" @onclick="ResetSession">
+                    @T("Reset")
+                </button>
+            </div>
+        }
+    </div>
+
+    <div class="kick-guidance">
+        <h3>@T("GuidanceTitle")</h3>
+        <ul class="tips-list">
+            <li>@T("Tip1")</li>
+            <li>@T("Tip2")</li>
+            <li>@T("Tip3")</li>
+            <li>@T("Tip4")</li>
+            <li>@T("Tip5")</li>
+        </ul>
+    </div>
+
+    @if (_history.Any())
+    {
+        <div class="kick-history">
+            <h3>@T("RecentSessions")</h3>
+            @{ var sessionIndex = 0; }
+            @foreach (var s in _history)
+            {
+                var sIdx = sessionIndex++;
+                <div class="history-item" style="animation-delay: @(sIdx * 0.05)s">
+                    <span>@s.Date.ToString("dd MMM")</span>
+                    <span><strong>@s.KickCount</strong> @T("KicksWord")</span>
+                    <span>@s.DurationMinutes @T("MinWord")</span>
+                </div>
+            }
+        </div>
+    }
+</div>
+
+@code {
+    private int _kicks;
+    private DateTime? _sessionStart;
+    private List<KickSession> _history = [];
+    private string _language = "English";
+
+    private int ElapsedMinutes =>
+        _sessionStart.HasValue ? (int)(DateTime.Now - _sessionStart.Value).TotalMinutes : 0;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var userId = await CurrentUser.GetUserIdAsync();
+        var profile = await Db.UserProfiles.AsNoTracking().FirstOrDefaultAsync(p => p.UserId == userId);
+        _language = (profile?.Language ?? AppLanguage.English).ToString();
+
+        await LoadHistoryAsync();
+    }
+
+    private async Task LoadHistoryAsync()
+    {
+        var userId = await CurrentUser.GetUserIdAsync();
+        _history = await Db.KickSessions.AsNoTracking()
+            .Where(k => k.UserId == userId)
+            .OrderByDescending(k => k.Date)
+            .Take(5)
+            .ToListAsync();
+    }
+
+    private void RecordKick()
+    {
+        _sessionStart ??= DateTime.Now;
+        _kicks++;
+    }
+
+    private async Task SaveSessionAsync()
+    {
+        if (_kicks == 0 || !_sessionStart.HasValue) return;
+        Db.KickSessions.Add(new KickSession
+        {
+            UserId = await CurrentUser.GetUserIdAsync(),
+            Date = DateOnly.FromDateTime(DateTime.Today),
+            KickCount = _kicks,
+            DurationMinutes = ElapsedMinutes
+        });
+        await Db.SaveChangesAsync();
+        await LoadHistoryAsync();
+        ResetSession();
+    }
+
+    private void ResetSession()
+    {
+        _kicks = 0;
+        _sessionStart = null;
+    }
+
+    private string GetKickMessage() => _kicks switch
+    {
+        0 => T("KickMsg0"),
+        < 3 => T("KickMsg1"),
+        < 6 => T("KickMsg2"),
+        < 10 => T("KickMsg3"),
+        >= 10 => T("KickMsg4")
+    };
+
+    // Same small hand-maintained-dictionary approach as Recipes.razor —
+    // covers English/Hindi/Telugu; every other profile language falls back
+    // to English.
+    private static readonly Dictionary<string, Dictionary<string, string>> Strings = new()
+    {
+        ["English"] = new()
+        {
+            ["Title"] = "🩷 Baby Kick Counter",
+            ["Subtitle"] = "Every kick is a little hello. Most care providers suggest counting from week 28 — but feeling your baby move at any stage is a beautiful thing.",
+            ["KicksThisSession"] = "kicks this session",
+            ["Celebration"] = "10 movements counted — wonderful! ✨",
+            ["TapForEachKick"] = "Tap for each kick",
+            ["StartedFormat"] = "Started {0} · {1} min elapsed",
+            ["SaveSession"] = "Save session ✨",
+            ["Reset"] = "Reset",
+            ["GuidanceTitle"] = "💗 Gentle guidance",
+            ["Tip1"] = "From week 28, many providers suggest counting 10 movements within 2 hours.",
+            ["Tip2"] = "Every baby has their own pattern — get to know yours.",
+            ["Tip3"] = "Babies are often most active after you eat or when you lie down.",
+            ["Tip4"] = "If you feel fewer movements than usual, contact your midwife or care provider — not to worry, just to check. 🩺",
+            ["Tip5"] = "You know your baby best. Trust your instincts.",
+            ["RecentSessions"] = "Recent sessions",
+            ["KicksWord"] = "kicks",
+            ["MinWord"] = "min",
+            ["KickMsg0"] = "Whenever you're ready — just tap each time you feel baby move. 🌷",
+            ["KickMsg1"] = "There she is 💗 Keep going...",
+            ["KickMsg2"] = "Your baby is saying hello. ✨",
+            ["KickMsg3"] = "Look at all those little hellos! 🩷",
+            ["KickMsg4"] = "10 movements — your baby is active and wonderful today. 💗",
+        },
+        ["Hindi"] = new()
+        {
+            ["Title"] = "🩷 बेबी किक काउंटर",
+            ["Subtitle"] = "हर हलचल एक छोटा सा 'नमस्ते' है। ज़्यादातर डॉक्टर 28वें सप्ताह से गिनती शुरू करने की सलाह देते हैं — लेकिन किसी भी समय अपने बच्चे की हलचल महसूस करना एक खूबसूरत एहसास है।",
+            ["KicksThisSession"] = "इस सत्र में हलचलें",
+            ["Celebration"] = "10 हलचलें गिन ली गईं — शानदार! ✨",
+            ["TapForEachKick"] = "हर हलचल के लिए टैप करें",
+            ["StartedFormat"] = "{0} बजे शुरू हुआ · {1} मिनट बीते",
+            ["SaveSession"] = "सत्र सहेजें ✨",
+            ["Reset"] = "रीसेट करें",
+            ["GuidanceTitle"] = "💗 कोमल मार्गदर्शन",
+            ["Tip1"] = "28वें सप्ताह से, कई डॉक्टर 2 घंटे में 10 हलचलें गिनने की सलाह देते हैं।",
+            ["Tip2"] = "हर बच्चे का अपना एक पैटर्न होता है — अपने बच्चे के पैटर्न को समझें।",
+            ["Tip3"] = "बच्चे अक्सर आपके खाने के बाद या लेटने पर सबसे ज़्यादा सक्रिय होते हैं।",
+            ["Tip4"] = "अगर आपको सामान्य से कम हलचल महसूस हो, तो अपनी दाई या डॉक्टर से संपर्क करें — घबराने की बात नहीं, बस जांच के लिए। 🩺",
+            ["Tip5"] = "आप अपने बच्चे को सबसे बेहतर जानती हैं। अपने अंतर्ज्ञान पर भरोसा रखें।",
+            ["RecentSessions"] = "हाल के सत्र",
+            ["KicksWord"] = "हलचलें",
+            ["MinWord"] = "मिनट",
+            ["KickMsg0"] = "जब भी आप तैयार हों — जब भी बच्चा हिले, टैप करें। 🌷",
+            ["KickMsg1"] = "वो रही 💗 ऐसे ही जारी रखें...",
+            ["KickMsg2"] = "आपका बच्चा नमस्ते कह रहा है। ✨",
+            ["KickMsg3"] = "देखिए ये सारे छोटे-छोटे नमस्ते! 🩷",
+            ["KickMsg4"] = "10 हलचलें — आज आपका बच्चा सक्रिय और शानदार है। 💗",
+        },
+        ["Telugu"] = new()
+        {
+            ["Title"] = "🩷 బేబీ కిక్ కౌంటర్",
+            ["Subtitle"] = "ప్రతి కదలిక ఒక చిన్న 'హలో'. చాలామంది వైద్యులు 28వ వారం నుండి లెక్కించమని సూచిస్తారు — కానీ ఏ దశలోనైనా మీ బిడ్డ కదలికను అనుభూతి చెందడం ఒక అందమైన విషయం.",
+            ["KicksThisSession"] = "ఈ సెషన్‌లో కదలికలు",
+            ["Celebration"] = "10 కదలికలు లెక్కించబడ్డాయి — అద్భుతం! ✨",
+            ["TapForEachKick"] = "ప్రతి కదలికకు నొక్కండి",
+            ["StartedFormat"] = "{0}కి ప్రారంభమైంది · {1} నిమిషాలు గడిచాయి",
+            ["SaveSession"] = "సెషన్ సేవ్ చేయండి ✨",
+            ["Reset"] = "రీసెట్ చేయండి",
+            ["GuidanceTitle"] = "💗 సున్నితమైన మార్గదర్శకత్వం",
+            ["Tip1"] = "28వ వారం నుండి, చాలామంది వైద్యులు 2 గంటల్లో 10 కదలికలు లెక్కించమని సూచిస్తారు.",
+            ["Tip2"] = "ప్రతి బిడ్డకు తనదైన ప్రత్యేక పద్ధతి ఉంటుంది — మీ బిడ్డదాన్ని తెలుసుకోండి.",
+            ["Tip3"] = "మీరు తిన్న తర్వాత లేదా పడుకున్నప్పుడు బిడ్డలు తరచుగా ఎక్కువ చురుకుగా ఉంటారు.",
+            ["Tip4"] = "మీకు మామూలు కంటే తక్కువ కదలికలు అనిపిస్తే, మీ మంత్రసాని లేదా వైద్యుడిని సంప్రదించండి — భయపడాల్సిన అవసరం లేదు, కేవలం తనిఖీ కోసం. 🩺",
+            ["Tip5"] = "మీ బిడ్డను మీకంటే బాగా ఎవరూ తెలుసుకోలేరు. మీ అంతర్‌దృష్టిని నమ్మండి.",
+            ["RecentSessions"] = "ఇటీవలి సెషన్‌లు",
+            ["KicksWord"] = "కదలికలు",
+            ["MinWord"] = "నిమిషాలు",
+            ["KickMsg0"] = "మీరు సిద్ధంగా ఉన్నప్పుడు — బిడ్డ కదిలిన ప్రతిసారీ నొక్కండి. 🌷",
+            ["KickMsg1"] = "అదిగో 💗 అలాగే కొనసాగించండి...",
+            ["KickMsg2"] = "మీ బిడ్డ హలో చెబుతోంది. ✨",
+            ["KickMsg3"] = "ఆ చిన్ని హలోలన్నీ చూడండి! 🩷",
+            ["KickMsg4"] = "10 కదలికలు — ఈరోజు మీ బిడ్డ చురుకుగా, అద్భుతంగా ఉంది. 💗",
+        },
+    };
+
+    private string T(string key) =>
+        (Strings.TryGetValue(_language, out var dict) && dict.TryGetValue(key, out var value))
+            ? value
+            : Strings["English"][key];
+}

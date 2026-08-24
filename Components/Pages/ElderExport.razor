@@ -1,0 +1,113 @@
+@page "/elder-care/export/{ElderId:int}"
+@using Janani.Models
+@using Janani.Data
+@using Janani.Services
+@using Microsoft.EntityFrameworkCore
+@inject AppDbContext Db
+@inject CurrentUserService CurrentUser
+@inject CareAccessService CareAccess
+@inject IJSRuntime JS
+@rendermode InteractiveServer
+
+<PageTitle>Janani — @(_elder?.Name ?? "Export") Summary</PageTitle>
+
+@if (!_loaded)
+{
+    <div class="bloom-container"><p class="sos-hint">Loading…</p></div>
+}
+else if (_elder == null)
+{
+    <div class="bloom-container"><p class="sos-hint">That profile couldn't be found.</p></div>
+}
+else
+{
+    <div class="bloom-container export-page">
+        <div class="export-actions no-print">
+            <button class="bloom-btn primary" @onclick="PrintAsync">🖨️ Print / Save as PDF</button>
+            <a class="bloom-btn secondary" href="/elder-care">← Back</a>
+        </div>
+
+        <div class="export-header">
+            <h1>@_elder.Name</h1>
+            <p class="export-meta">@_elder.Relation, age @_elder.Age — summary generated @DateTime.Now.ToString("dd MMM yyyy")</p>
+            @if (!string.IsNullOrWhiteSpace(_elder.MedicalNotes))
+            {
+                <p class="export-meta">Notes: @_elder.MedicalNotes</p>
+            }
+        </div>
+
+        <h2>Recent vitals</h2>
+        @if (_vitals.Count == 0)
+        {
+            <p class="sos-hint">No vitals recorded yet.</p>
+        }
+        else
+        {
+            <table class="export-table">
+                <thead>
+                    <tr><th>Date</th><th>BP</th><th>Heart rate</th><th>Temp</th><th>O2 sat</th></tr>
+                </thead>
+                <tbody>
+                    @foreach (var v in _vitals)
+                    {
+                        <tr>
+                            <td>@v.RecordedAt.ToString("dd MMM yyyy HH:mm")</td>
+                            <td>@(v.SystolicBp is int sys && v.DiastolicBp is int dia ? $"{sys}/{dia}" : "—")</td>
+                            <td>@(v.HeartRate?.ToString() ?? "—")</td>
+                            <td>@(v.TemperatureC is decimal t ? $"{t}°C" : "—")</td>
+                            <td>@(v.OxygenSaturation is int o ? $"{o}%" : "—")</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
+
+        <h2>Recent alerts</h2>
+        @if (_alerts.Count == 0)
+        {
+            <p class="sos-hint">No alerts on record.</p>
+        }
+        else
+        {
+            <ul class="export-list">
+                @foreach (var a in _alerts)
+                {
+                    <li>[@a.TriggeredAt.ToString("dd MMM yyyy")] @(a.Severity == AlertSeverity.Critical ? "Critical" : "Warning") — @a.Message</li>
+                }
+            </ul>
+        }
+    </div>
+}
+
+@code {
+    [Parameter] public int ElderId { get; set; }
+
+    private ElderProfile? _elder;
+    private bool _loaded;
+    private List<VitalsReading> _vitals = [];
+    private List<Alert> _alerts = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        var userId = await CurrentUser.GetUserIdAsync();
+        var accessibleIds = await CareAccess.GetAccessibleElderIdsAsync(userId);
+        _elder = accessibleIds.Contains(ElderId)
+            ? await Db.ElderProfiles.AsNoTracking().FirstOrDefaultAsync(e => e.Id == ElderId)
+            : null;
+        if (_elder == null) { _loaded = true; return; }
+
+        _vitals = await Db.VitalsReadings.AsNoTracking()
+            .Where(v => v.ElderProfileId == ElderId)
+            .OrderByDescending(v => v.RecordedAt)
+            .Take(20)
+            .ToListAsync();
+        _alerts = await Db.Alerts.AsNoTracking()
+            .Where(a => a.ElderProfileId == ElderId)
+            .OrderByDescending(a => a.TriggeredAt)
+            .Take(10)
+            .ToListAsync();
+        _loaded = true;
+    }
+
+    private async Task PrintAsync() => await JS.InvokeVoidAsync("print");
+}

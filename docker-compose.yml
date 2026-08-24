@@ -1,0 +1,51 @@
+version: '3.8'
+
+# Janani — Google Cloud Native Multi-Agent System
+# Local dev uses SQLite + Gemini AI Studio API key.
+# Cloud:      Set DATABASE_URL (Cloud SQL), GEMINI_API_KEY or mount gcp-key.json.
+#
+# Usage:
+#   docker-compose up --build                     # local (SQLite, Gemini API key)
+#   GCP_PROJECT_ID=my-proj docker-compose up      # cloud-connected local test
+
+services:
+  janani-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: janani_app
+    ports:
+      - "8080:8080"
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      # ── AI Provider ───────────────────────────────────
+      - AI_PROVIDER=${AI_PROVIDER:-vertex}
+      - VERTEX_CHAT_DEPLOYMENT=${VERTEX_CHAT_DEPLOYMENT:-gemini-1.5-flash}
+      # ── Google Cloud Credentials ──────────────────────
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - VERTEX_API_KEY=${VERTEX_API_KEY:-}
+      # ── Google Calendar Sync (per-user OAuth) ─────────
+      - GOOGLE_CALENDAR_CLIENT_ID=${GOOGLE_CALENDAR_CLIENT_ID:-}
+      - GOOGLE_CALENDAR_CLIENT_SECRET=${GOOGLE_CALENDAR_CLIENT_SECRET:-}
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/gcp-key.json
+      # ── GCP Project / Storage / Pub/Sub ──────────────
+      - GCP_PROJECT_ID=${GCP_PROJECT_ID:-janani-project}
+      - GCP_STORAGE_BUCKET=${GCP_STORAGE_BUCKET:-janani-assets}
+      - PUBSUB_VERIFICATION_TOKEN=${PUBSUB_VERIFICATION_TOKEN:-}
+      # ── Database: leave empty for SQLite (local dev) ──
+      # Set DATABASE_URL=postgres://... to use Cloud SQL
+      - DATABASE_URL=${DATABASE_URL:-}
+    volumes:
+      - janani_data:/app
+      # Mount GCP service-account key for local cloud testing (optional)
+      # - ./gcp-key.json:/app/gcp-key.json:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+volumes:
+  janani_data:

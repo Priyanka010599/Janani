@@ -1,0 +1,256 @@
+@page "/water"
+@using Janani.Models
+@using Janani.Data
+@using Microsoft.EntityFrameworkCore
+@inject AppDbContext Db
+@inject CurrentUserService CurrentUser
+@rendermode InteractiveServer
+
+<PageTitle>Janani — Water & Wellness</PageTitle>
+
+<div class="bloom-container">
+    <div class="section-header">
+        <h1>@T("Title")</h1>
+        <p class="subtitle">@T("Subtitle")</p>
+    </div>
+
+    <div class="water-card @(_todayGlasses >= 8 ? "goal-reached" : "")">
+
+        @if (_todayGlasses >= 8)
+        {
+            <div class="celebration">@T("Celebration")</div>
+        }
+
+        <!-- Progress ring -->
+        <div class="progress-ring-wrap">
+            <div class="progress-circle"
+                 style="--pct: @(Math.Min(100, _todayGlasses * 12.5))">
+                <div class="progress-inner">
+                    <span class="progress-icon">@(_todayGlasses >= 8 ? "🌟" : "💧")</span>
+                    <span class="count-big">@_todayGlasses</span>
+                    <span class="count-label">@T("OfGlasses")</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Individual glass buttons with fill animation -->
+        <div class="water-glasses">
+            @for (int i = 1; i <= 8; i++)
+            {
+                var glassNum = i;
+                <button class="glass-btn @(glassNum <= _todayGlasses ? "filled" : "empty")"
+                        @onclick="() => SetGlasses(glassNum)"
+                        title="@glassNum @(glassNum > 1 ? T("GlassPlural") : T("GlassSingular"))">
+                    <div class="glass-fill"></div>
+                    <span class="glass-icon">@(glassNum <= _todayGlasses ? "💧" : "🫙")</span>
+                    <span class="glass-num">@glassNum</span>
+                </button>
+            }
+        </div>
+
+        <!-- Quick +/- buttons -->
+        <div class="quick-actions">
+            <button class="quick-btn minus"
+                    @onclick="() => SetGlasses(Math.Max(0, _todayGlasses - 1))"
+                    disabled="@(_todayGlasses == 0)">−</button>
+            <button class="quick-btn plus" @onclick="() => SetGlasses(_todayGlasses + 1)"
+                    disabled="@(_todayGlasses >= 8)">
+                @T("AddGlassButton")
+            </button>
+        </div>
+
+        <div class="water-message">
+            <p>@GetGentleMessage()</p>
+        </div>
+
+        @if (_todayGlasses > 0)
+        {
+            <button class="bloom-btn secondary small-btn reset-btn"
+                    @onclick="() => SetGlasses(0)">
+                @T("ResetToday")
+            </button>
+        }
+    </div>
+
+    <div class="wellness-tips">
+        <h3>@T("TipsTitle")</h3>
+        <ul class="tips-list">
+            <li>@T("Tip1")</li>
+            <li>@T("Tip2")</li>
+            <li>@T("Tip3")</li>
+            <li>@T("Tip4")</li>
+            <li>@T("Tip5")</li>
+        </ul>
+    </div>
+
+    <div class="water-history">
+        <h3>@T("ThisWeek")</h3>
+        <div class="history-row">
+            @foreach (var entry in _weekHistory)
+            {
+                var isToday = entry.Date == _today;
+                <div class="history-day @(isToday ? "is-today" : "")">
+                    <span class="history-date">@entry.Date.ToString("ddd")</span>
+                    <div class="history-bar-wrap">
+                        <div class="history-bar @(entry.GlassesCount >= 8 ? "hit-goal" : "")"
+                             style="height: @(Math.Min(100, entry.GlassesCount * 12.5))%">
+                        </div>
+                    </div>
+                    <span class="history-count">@entry.GlassesCount</span>
+                </div>
+            }
+        </div>
+    </div>
+</div>
+
+@code {
+    private int _todayGlasses;
+    private List<WaterIntakeEntry> _weekHistory = [];
+    private readonly DateOnly _today = DateOnly.FromDateTime(DateTime.Today);
+    private string _language = "English";
+
+    protected override async Task OnInitializedAsync()
+    {
+        var userId = await CurrentUser.GetUserIdAsync();
+        var profile = await Db.UserProfiles.AsNoTracking().FirstOrDefaultAsync(p => p.UserId == userId);
+        _language = (profile?.Language ?? AppLanguage.English).ToString();
+
+        var todayEntry = await Db.WaterIntake.AsNoTracking().FirstOrDefaultAsync(w => w.Date == _today && w.UserId == userId);
+        _todayGlasses = todayEntry?.GlassesCount ?? 0;
+        await LoadWeekHistoryAsync();
+    }
+
+    private async Task LoadWeekHistoryAsync()
+    {
+        var userId = await CurrentUser.GetUserIdAsync();
+        var weekStart = _today.AddDays(-6);
+        var dbEntries = await Db.WaterIntake.AsNoTracking().Where(w => w.Date >= weekStart && w.UserId == userId).ToListAsync();
+
+        _weekHistory = Enumerable.Range(0, 7)
+            .Select(i => _today.AddDays(i - 6))
+            .Select(day => dbEntries.FirstOrDefault(w => w.Date == day)
+                ?? new WaterIntakeEntry { Date = day, GlassesCount = 0 })
+            .OrderBy(w => w.Date)
+            .ToList();
+    }
+
+    private async Task SetGlasses(int count)
+    {
+        if (count < 0 || count > 8) return;
+        _todayGlasses = count;
+
+        var userId = await CurrentUser.GetUserIdAsync();
+        var existing = await Db.WaterIntake.FirstOrDefaultAsync(w => w.Date == _today && w.UserId == userId);
+        if (existing != null)
+            existing.GlassesCount = count;
+        else
+            Db.WaterIntake.Add(new WaterIntakeEntry { Date = _today, GlassesCount = count, UserId = userId });
+
+        await Db.SaveChangesAsync();
+
+        var historyEntry = _weekHistory.FirstOrDefault(w => w.Date == _today);
+        if (historyEntry != null) historyEntry.GlassesCount = count;
+    }
+
+    private string GetGentleMessage() => _todayGlasses switch
+    {
+        0 => T("WaterMsg0"),
+        1 => T("WaterMsg1"),
+        2 or 3 => T("WaterMsg2"),
+        4 => T("WaterMsg3"),
+        5 or 6 => T("WaterMsg4"),
+        7 => T("WaterMsg5"),
+        >= 8 => T("WaterMsg6"),
+        _ => T("WaterMsgDefault")
+    };
+
+    // Same small hand-maintained-dictionary approach as Recipes.razor —
+    // covers English/Hindi/Telugu; every other profile language falls back
+    // to English.
+    private static readonly Dictionary<string, Dictionary<string, string>> Strings = new()
+    {
+        ["English"] = new()
+        {
+            ["Title"] = "💧 Water & Wellness",
+            ["Subtitle"] = "Staying hydrated is one of the gentlest things you can do for yourself and your baby today.",
+            ["Celebration"] = "🎉 You hit your goal today — wonderful! ✨",
+            ["OfGlasses"] = "of 8 glasses",
+            ["GlassSingular"] = "glass",
+            ["GlassPlural"] = "glasses",
+            ["AddGlassButton"] = "+ Add a glass",
+            ["ResetToday"] = "Reset today",
+            ["TipsTitle"] = "💗 Little reminders",
+            ["Tip1"] = "Keep a water bottle nearby — it helps more than you'd think.",
+            ["Tip2"] = "If plain water feels hard, try a slice of lemon, cucumber, or mint.",
+            ["Tip3"] = "Herbal teas (ginger, peppermint, rooibos) count too — just avoid high-caffeine ones.",
+            ["Tip4"] = "Dehydration can cause Braxton Hicks contractions — water can ease them.",
+            ["Tip5"] = "You don't have to be perfect. Every glass counts. 🌿",
+            ["ThisWeek"] = "This week",
+            ["WaterMsg0"] = "Whenever you're ready — even one glass is a beautiful start. 🌸",
+            ["WaterMsg1"] = "That's a wonderful beginning. Your body says thank you. 💗",
+            ["WaterMsg2"] = "You're doing so well. Keep going at your own pace. 🌿",
+            ["WaterMsg3"] = "Halfway there, and you're doing beautifully. 💧",
+            ["WaterMsg4"] = "Look at you taking such good care of yourself. ✨",
+            ["WaterMsg5"] = "Almost there — one more sip whenever it feels right. 🌷",
+            ["WaterMsg6"] = "You've done something wonderful for yourself and your baby today. ❤️",
+            ["WaterMsgDefault"] = "Every glass matters. You're doing great. 💗",
+        },
+        ["Hindi"] = new()
+        {
+            ["Title"] = "💧 पानी और सेहत",
+            ["Subtitle"] = "हाइड्रेटेड रहना आज आप अपने और अपने बच्चे के लिए कर सकने वाली सबसे कोमल चीज़ों में से एक है।",
+            ["Celebration"] = "🎉 आपने आज अपना लक्ष्य पूरा कर लिया — शानदार! ✨",
+            ["OfGlasses"] = "8 गिलास में से",
+            ["GlassSingular"] = "गिलास",
+            ["GlassPlural"] = "गिलास",
+            ["AddGlassButton"] = "+ एक गिलास जोड़ें",
+            ["ResetToday"] = "आज रीसेट करें",
+            ["TipsTitle"] = "💗 छोटी याद दिलाने वाली बातें",
+            ["Tip1"] = "पानी की बोतल पास रखें — यह आपकी सोच से ज़्यादा मदद करती है।",
+            ["Tip2"] = "अगर सादा पानी पीना मुश्किल लगे, तो नींबू, खीरे या पुदीने का एक टुकड़ा डालकर देखें।",
+            ["Tip3"] = "हर्बल चाय (अदरक, पुदीना, रूइबोस) भी गिनी जाती हैं — बस ज़्यादा कैफीन वाली चाय से बचें।",
+            ["Tip4"] = "पानी की कमी से ब्रैक्सटन हिक्स संकुचन हो सकते हैं — पानी इन्हें आराम देने में मदद करता है।",
+            ["Tip5"] = "आपको परफेक्ट होने की ज़रूरत नहीं है। हर गिलास मायने रखता है। 🌿",
+            ["ThisWeek"] = "इस सप्ताह",
+            ["WaterMsg0"] = "जब भी आप तैयार हों — एक गिलास भी एक खूबसूरत शुरुआत है। 🌸",
+            ["WaterMsg1"] = "यह एक शानदार शुरुआत है। आपका शरीर आपको धन्यवाद कहता है। 💗",
+            ["WaterMsg2"] = "आप बहुत अच्छा कर रही हैं। अपनी गति से आगे बढ़ती रहें। 🌿",
+            ["WaterMsg3"] = "आधा रास्ता पूरा हो गया, और आप बहुत खूबसूरती से कर रही हैं। 💧",
+            ["WaterMsg4"] = "देखिए आप अपना कितना अच्छा ख्याल रख रही हैं। ✨",
+            ["WaterMsg5"] = "बस थोड़ा और — जब सही लगे, एक और घूंट ले लें। 🌷",
+            ["WaterMsg6"] = "आपने आज अपने और अपने बच्चे के लिए कुछ शानदार किया है। ❤️",
+            ["WaterMsgDefault"] = "हर गिलास मायने रखता है। आप बहुत अच्छा कर रही हैं। 💗",
+        },
+        ["Telugu"] = new()
+        {
+            ["Title"] = "💧 నీరు & ఆరోగ్యం",
+            ["Subtitle"] = "హైడ్రేటెడ్‌గా ఉండటం ఈరోజు మీ కోసం మరియు మీ బిడ్డ కోసం మీరు చేయగలిగే అత్యంత సున్నితమైన పనుల్లో ఒకటి.",
+            ["Celebration"] = "🎉 మీరు ఈరోజు మీ లక్ష్యాన్ని చేరుకున్నారు — అద్భుతం! ✨",
+            ["OfGlasses"] = "8 గ్లాసుల్లో",
+            ["GlassSingular"] = "గ్లాసు",
+            ["GlassPlural"] = "గ్లాసులు",
+            ["AddGlassButton"] = "+ ఒక గ్లాసు జోడించండి",
+            ["ResetToday"] = "ఈరోజు రీసెట్ చేయండి",
+            ["TipsTitle"] = "💗 చిన్న గుర్తు చేయించేవి",
+            ["Tip1"] = "నీళ్ల సీసాను దగ్గర్లో ఉంచుకోండి — ఇది మీరు అనుకున్నదానికంటే ఎక్కువ సహాయపడుతుంది.",
+            ["Tip2"] = "సాదా నీళ్లు తాగడం కష్టంగా అనిపిస్తే, నిమ్మకాయ, దోసకాయ లేదా పుదీనా ముక్క వేసుకుని ప్రయత్నించండి.",
+            ["Tip3"] = "హెర్బల్ టీలు (అల్లం, పుదీనా, రూయిబోస్) కూడా లెక్కలోకి వస్తాయి — ఎక్కువ కెఫిన్ ఉన్నవి మాత్రం మానుకోండి.",
+            ["Tip4"] = "నిర్జలీకరణం వల్ల బ్రాక్స్‌టన్ హిక్స్ సంకోచాలు రావచ్చు — నీరు వాటిని తగ్గించడంలో సహాయపడుతుంది.",
+            ["Tip5"] = "మీరు పరిపూర్ణంగా ఉండాల్సిన అవసరం లేదు. ప్రతి గ్లాసు ముఖ్యమే. 🌿",
+            ["ThisWeek"] = "ఈ వారం",
+            ["WaterMsg0"] = "మీరు సిద్ధంగా ఉన్నప్పుడు — ఒక్క గ్లాసు కూడా ఒక అందమైన ప్రారంభం. 🌸",
+            ["WaterMsg1"] = "ఇది ఒక అద్భుతమైన ప్రారంభం. మీ శరీరం మీకు ధన్యవాదాలు చెబుతోంది. 💗",
+            ["WaterMsg2"] = "మీరు చాలా బాగా చేస్తున్నారు. మీ వేగంతో కొనసాగించండి. 🌿",
+            ["WaterMsg3"] = "సగం దూరం వచ్చేసింది, మీరు అద్భుతంగా చేస్తున్నారు. 💧",
+            ["WaterMsg4"] = "మిమ్మల్ని మీరు ఎంత బాగా చూసుకుంటున్నారో చూడండి. ✨",
+            ["WaterMsg5"] = "దాదాపు అయిపోయింది — సరైనదిగా అనిపించినప్పుడు మరో గుక్క తీసుకోండి. 🌷",
+            ["WaterMsg6"] = "మీరు ఈరోజు మీ కోసం మరియు మీ బిడ్డ కోసం అద్భుతమైనది చేశారు. ❤️",
+            ["WaterMsgDefault"] = "ప్రతి గ్లాసు ముఖ్యమే. మీరు చాలా బాగా చేస్తున్నారు. 💗",
+        },
+    };
+
+    private string T(string key) =>
+        (Strings.TryGetValue(_language, out var dict) && dict.TryGetValue(key, out var value))
+            ? value
+            : Strings["English"][key];
+}

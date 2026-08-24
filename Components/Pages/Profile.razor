@@ -1,0 +1,254 @@
+@page "/profile"
+@using Janani.Models
+@using Janani.Data
+@using Janani.Services
+@using Microsoft.EntityFrameworkCore
+@inject AppDbContext Db
+@inject CurrentUserService CurrentUser
+@inject UserProfileCache ProfileCache
+@rendermode InteractiveServer
+
+<PageTitle>Janani — Your Profile</PageTitle>
+
+<div class="bloom-container">
+    <div class="section-header">
+        <h1>🌷 @T("Title")</h1>
+        <p class="subtitle">@T("Subtitle")</p>
+    </div>
+
+    @if (_saved)
+    {
+        <div class="sos-safety-note">
+            <p>💗 @T("Saved")</p>
+        </div>
+    }
+    @if (_error != null)
+    {
+        <div class="meal-gentle-note error-note"><p>💗 @_error</p></div>
+    }
+
+    @if (_profile != null && _user != null)
+    {
+        <div class="appointment-form">
+            <div class="form-field">
+                <label>@T("NameLabel")</label>
+                <input @bind="_name" placeholder="@T("NamePlaceholder")" />
+            </div>
+
+            <div class="form-field">
+                <label class="checkbox-field">
+                    <input type="checkbox" @bind="_tracksPregnancy" />
+                    @T("TracksPregnancyLabel")
+                </label>
+                <p class="sos-hint">@T("TracksPregnancyHint")</p>
+            </div>
+
+            <div class="form-field">
+                <label class="checkbox-field">
+                    <input type="checkbox" @bind="_caresForElder" />
+                    @T("CaresForElderLabel")
+                </label>
+            </div>
+
+            <div class="form-field">
+                <label class="checkbox-field">
+                    <input type="checkbox" @bind="_caresForInfant" />
+                    @T("CaresForInfantLabel")
+                </label>
+                <p class="sos-hint">@T("CaresForInfantHint")</p>
+            </div>
+
+            @if (_tracksPregnancy)
+            {
+                <div class="form-field">
+                    <label>@T("WeeksPregnantLabel")</label>
+                    <input type="number" @bind="_weeksPregnant" min="0" max="42" />
+                    <p class="sos-hint">@T("CurrentWeekPrefix")@_profile.CurrentWeek@T("CurrentWeekSuffix")</p>
+                </div>
+
+                <div class="form-field">
+                    <label class="checkbox-field">
+                        <input type="checkbox" @bind="_workingWomanMode" />
+                        @T("WorkingWomanLabel")
+                    </label>
+                </div>
+            }
+
+            <div class="form-field">
+                <label>@T("LanguageLabel")</label>
+                <select @bind="_language">
+                    @foreach (var lang in Enum.GetValues<AppLanguage>())
+                    {
+                        <option value="@lang">@lang.DisplayName()</option>
+                    }
+                </select>
+                <p class="sos-hint">@T("LanguageHint")</p>
+            </div>
+
+            <div class="form-field">
+                <label>@T("UsernameLabel")</label>
+                <input value="@_user.Username" disabled />
+                <p class="sos-hint">@T("UsernameHint")</p>
+            </div>
+
+            <div class="form-field">
+                <label>@T("EmailLabel")</label>
+                <input value="@_user.Email" disabled />
+                <p class="sos-hint">@T("EmailHint")</p>
+            </div>
+
+            <div class="form-actions">
+                <button class="bloom-btn primary" @onclick="SaveAsync" disabled="@string.IsNullOrWhiteSpace(_name)">
+                    @T("SaveChangesButton")
+                </button>
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    private UserProfile? _profile;
+    private User? _user;
+    private string _name = string.Empty;
+    private int _weeksPregnant;
+    private bool _workingWomanMode;
+    private bool _tracksPregnancy;
+    private bool _caresForElder;
+    private bool _caresForInfant;
+    private AppLanguage _language;
+    private string _uiLanguage = "English";
+    private bool _saved;
+    private string? _error;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var userId = await CurrentUser.GetUserIdAsync();
+        _profile = await Db.UserProfiles.FirstOrDefaultAsync(p => p.UserId == userId);
+        _user = await Db.Users.FirstOrDefaultAsync(u => u.Id == userId);
+
+        if (_profile != null)
+        {
+            _name = _profile.Name;
+            _weeksPregnant = _profile.CurrentWeek;
+            _workingWomanMode = _profile.WorkingWomanMode;
+            _tracksPregnancy = _profile.TracksPregnancy;
+            _caresForElder = _profile.CaresForElder;
+            _caresForInfant = _profile.CaresForInfant;
+            _language = _profile.Language;
+            _uiLanguage = _profile.Language.ToString();
+        }
+    }
+
+    private async Task SaveAsync()
+    {
+        if (_profile == null || string.IsNullOrWhiteSpace(_name)) return;
+        _error = null;
+        _saved = false;
+
+        try
+        {
+            _profile.Name = _name.Trim();
+            _profile.TracksPregnancy = _tracksPregnancy;
+            _profile.CaresForElder = _caresForElder;
+            _profile.CaresForInfant = _caresForInfant;
+            _profile.Language = _language;
+            if (_tracksPregnancy)
+            {
+                _profile.PregnancyStartDate = DateOnly.FromDateTime(DateTime.Today).AddDays(-(Math.Clamp(_weeksPregnant, 0, 42) * 7));
+                _profile.WorkingWomanMode = _workingWomanMode;
+            }
+            await Db.SaveChangesAsync();
+
+            ProfileCache.Invalidate();
+            _saved = true;
+        }
+        catch (Exception)
+        {
+            _error = T("SaveError");
+        }
+    }
+
+    private static readonly Dictionary<string, Dictionary<string, string>> Strings = new()
+    {
+        ["English"] = new()
+        {
+            ["Title"] = "Your Profile",
+            ["Subtitle"] = "Update your details any time — this shapes how Janani talks to you.",
+            ["Saved"] = "Saved.",
+            ["SaveError"] = "Couldn't save that — please try again.",
+            ["NameLabel"] = "Your name",
+            ["NamePlaceholder"] = "What should we call you?",
+            ["TracksPregnancyLabel"] = "I'm currently pregnant and want pregnancy tracking",
+            ["TracksPregnancyHint"] = "Turn this off any time — e.g. after the baby arrives, or if you're only here as a caregiver. Pregnancy-specific pages disappear from the menu when this is off.",
+            ["CaresForElderLabel"] = "I care for an elder or aging parent",
+            ["CaresForInfantLabel"] = "I care for an infant or baby",
+            ["CaresForInfantHint"] = "Elder Care and Infant Care only show up in the menu when the matching box above is checked — Family Care and SOS are always available.",
+            ["WeeksPregnantLabel"] = "How many weeks pregnant are you today?",
+            ["CurrentWeekPrefix"] = "Currently calculated as week ",
+            ["CurrentWeekSuffix"] = ". Changing this resets the date your pregnancy is tracked from.",
+            ["WorkingWomanLabel"] = "I'm balancing this with work",
+            ["LanguageLabel"] = "Language",
+            ["LanguageHint"] = "All agents — Companion, Elder Care, Infant Care, Family Care, and the rest — respond in this language.",
+            ["UsernameLabel"] = "Username",
+            ["UsernameHint"] = "Username can't be changed here yet.",
+            ["EmailLabel"] = "Email",
+            ["EmailHint"] = "Email can't be changed here yet.",
+            ["SaveChangesButton"] = "Save changes 💗",
+        },
+        ["Hindi"] = new()
+        {
+            ["Title"] = "आपकी प्रोफ़ाइल",
+            ["Subtitle"] = "अपनी जानकारी कभी भी अपडेट करें — यह तय करता है कि जनानी आपसे कैसे बात करती है।",
+            ["Saved"] = "सेव हो गया।",
+            ["SaveError"] = "उसे सेव नहीं किया जा सका — कृपया फिर से प्रयास करें।",
+            ["NameLabel"] = "आपका नाम",
+            ["NamePlaceholder"] = "हम आपको क्या कहें?",
+            ["TracksPregnancyLabel"] = "मैं अभी गर्भवती हूं और गर्भावस्था ट्रैकिंग चाहती हूं",
+            ["TracksPregnancyHint"] = "इसे कभी भी बंद करें — जैसे बच्चे के जन्म के बाद, या यदि आप केवल एक देखभालकर्ता के रूप में यहां हैं। बंद होने पर गर्भावस्था से जुड़े पेज मेनू से गायब हो जाते हैं।",
+            ["CaresForElderLabel"] = "मैं किसी बुज़ुर्ग या वृद्ध माता-पिता की देखभाल करती हूं",
+            ["CaresForInfantLabel"] = "मैं किसी शिशु या बच्चे की देखभाल करती हूं",
+            ["CaresForInfantHint"] = "एल्डर केयर और इन्फेंट केयर मेनू में तभी दिखाई देते हैं जब ऊपर दिया गया संबंधित बॉक्स चेक किया गया हो — फैमिली केयर और SOS हमेशा उपलब्ध रहते हैं।",
+            ["WeeksPregnantLabel"] = "आज आप कितने सप्ताह की गर्भवती हैं?",
+            ["CurrentWeekPrefix"] = "अभी सप्ताह ",
+            ["CurrentWeekSuffix"] = " के रूप में गणना की गई है। इसे बदलने से आपकी गर्भावस्था ट्रैक होने की तारीख रीसेट हो जाती है।",
+            ["WorkingWomanLabel"] = "मैं इसे काम के साथ संभाल रही हूं",
+            ["LanguageLabel"] = "भाषा",
+            ["LanguageHint"] = "सभी एजेंट — साथी, एल्डर केयर, इन्फेंट केयर, फैमिली केयर, और बाकी सभी — इसी भाषा में जवाब देते हैं।",
+            ["UsernameLabel"] = "यूज़रनेम",
+            ["UsernameHint"] = "यूज़रनेम अभी यहां बदला नहीं जा सकता।",
+            ["EmailLabel"] = "ईमेल",
+            ["EmailHint"] = "ईमेल अभी यहां बदला नहीं जा सकता।",
+            ["SaveChangesButton"] = "बदलाव सहेजें 💗",
+        },
+        ["Telugu"] = new()
+        {
+            ["Title"] = "మీ ప్రొఫైల్",
+            ["Subtitle"] = "మీ వివరాలను ఎప్పుడైనా అప్‌డేట్ చేయండి — ఇది జననీ మీతో ఎలా మాట్లాడుతుందో నిర్ణయిస్తుంది.",
+            ["Saved"] = "సేవ్ చేయబడింది.",
+            ["SaveError"] = "దాన్ని సేవ్ చేయలేకపోయాము — దయచేసి మళ్లీ ప్రయత్నించండి.",
+            ["NameLabel"] = "మీ పేరు",
+            ["NamePlaceholder"] = "మిమ్మల్ని మేము ఏమని పిలవాలి?",
+            ["TracksPregnancyLabel"] = "నేను ప్రస్తుతం గర్భవతిని మరియు గర్భధారణ ట్రాకింగ్ కావాలి",
+            ["TracksPregnancyHint"] = "దీన్ని ఎప్పుడైనా ఆఫ్ చేయండి — ఉదా. బిడ్డ పుట్టిన తర్వాత, లేదా మీరు కేవలం సంరక్షకురాలిగా మాత్రమే ఇక్కడ ఉంటే. ఇది ఆఫ్‌లో ఉన్నప్పుడు గర్భధారణకు సంబంధించిన పేజీలు మెనూ నుండి కనిపించవు.",
+            ["CaresForElderLabel"] = "నేను వృద్ధుడు లేదా వృద్ధాప్య తల్లిదండ్రుల సంరక్షణ చూస్తాను",
+            ["CaresForInfantLabel"] = "నేను శిశువు లేదా బిడ్డ సంరక్షణ చూస్తాను",
+            ["CaresForInfantHint"] = "పైన సంబంధిత బాక్స్ చెక్ చేసినప్పుడు మాత్రమే ఎల్డర్ కేర్ మరియు ఇన్ఫెంట్ కేర్ మెనూలో కనిపిస్తాయి — ఫ్యామిలీ కేర్ మరియు SOS ఎల్లప్పుడూ అందుబాటులో ఉంటాయి.",
+            ["WeeksPregnantLabel"] = "ఈరోజు మీరు ఎన్ని వారాల గర్భవతిగా ఉన్నారు?",
+            ["CurrentWeekPrefix"] = "ప్రస్తుతం వారం ",
+            ["CurrentWeekSuffix"] = "గా లెక్కించబడింది. దీన్ని మార్చడం వల్ల మీ గర్భధారణ ట్రాక్ చేయబడే తేదీ రీసెట్ అవుతుంది.",
+            ["WorkingWomanLabel"] = "నేను దీన్ని పనితో బ్యాలెన్స్ చేస్తున్నాను",
+            ["LanguageLabel"] = "భాష",
+            ["LanguageHint"] = "అన్ని ఏజెంట్లు — సహచరి, ఎల్డర్ కేర్, ఇన్ఫెంట్ కేర్, ఫ్యామిలీ కేర్, మరియు మిగతావన్నీ — ఈ భాషలో స్పందిస్తాయి.",
+            ["UsernameLabel"] = "యూజర్‌నేమ్",
+            ["UsernameHint"] = "యూజర్‌నేమ్‌ను ఇప్పుడు ఇక్కడ మార్చలేరు.",
+            ["EmailLabel"] = "ఇమెయిల్",
+            ["EmailHint"] = "ఇమెయిల్‌ను ఇప్పుడు ఇక్కడ మార్చలేరు.",
+            ["SaveChangesButton"] = "మార్పులను సేవ్ చేయండి 💗",
+        },
+    };
+
+    private string T(string key) =>
+        (Strings.TryGetValue(_uiLanguage, out var dict) && dict.TryGetValue(key, out var value))
+            ? value
+            : Strings["English"][key];
+}

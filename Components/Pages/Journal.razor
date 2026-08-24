@@ -1,0 +1,357 @@
+@page "/journal"
+@using Janani.Models
+@using Janani.Data
+@using Janani.Services
+@using Microsoft.EntityFrameworkCore
+@using Microsoft.AspNetCore.Components.Forms
+@using SixLabors.ImageSharp
+@using SixLabors.ImageSharp.Processing
+@using SixLabors.ImageSharp.Formats.Jpeg
+@inject AppDbContext Db
+@inject UserProfileCache ProfileCache
+@inject CurrentUserService CurrentUser
+@rendermode InteractiveServer
+
+<PageTitle>Janani — My Pregnancy Journal</PageTitle>
+
+<div class="bloom-container">
+    <div class="journal-header">
+        <h1>@T("Title")</h1>
+        <p class="subtitle">@T("Subtitle")</p>
+    </div>
+    <div class="journal-divider">❦</div>
+
+    @if (_writing)
+    {
+        <div class="journal-editor">
+            <input @bind="_newTitle" placeholder="@T("TitlePlaceholder")" class="journal-title-input" />
+            <div class="mood-quick-select">
+                @foreach (var emoji in new[] { "💗", "😊", "😴", "🥺", "✨", "🤢", "😮‍💨", "🌿" })
+                {
+                    <button class="emoji-btn @(_selectedEmoji == emoji ? "selected" : "")"
+                            @onclick="() => _selectedEmoji = emoji">@emoji</button>
+                }
+            </div>
+            <textarea @bind="_newContent"
+                      placeholder="@T("ContentPlaceholder")"
+                      rows="8" class="journal-textarea"></textarea>
+
+            <div class="photo-upload-section">
+                <label class="photo-upload-label">
+                    <InputFile OnChange="OnPhotosSelectedAsync" multiple accept="image/*" />
+                    <span>@T("AddPhotos")</span>
+                </label>
+                @if (_photoError != null)
+                {
+                    <p class="photo-error">@_photoError</p>
+                }
+                @if (_newPhotos.Any())
+                {
+                    <div class="photo-preview-row">
+                        @foreach (var photo in _newPhotos)
+                        {
+                            <div class="photo-preview">
+                                <img src="@($"data:{photo.ContentType};base64,{photo.Base64}")" alt="@T("AltPreview")" />
+                                <button type="button" title="@T("RemovePhoto")" aria-label="@T("RemovePhoto")" @onclick="() => RemovePendingPhoto(photo)">✕</button>
+                            </div>
+                        }
+                    </div>
+                }
+            </div>
+
+            <div class="journal-actions">
+                <button class="bloom-btn primary" @onclick="SaveEntryAsync"
+                        disabled="@string.IsNullOrWhiteSpace(_newContent)">
+                    @T("SaveButton")
+                </button>
+                <button class="bloom-btn secondary" @onclick="CancelWriting">
+                    @T("CancelButton")
+                </button>
+            </div>
+        </div>
+    }
+    else
+    {
+        <button class="bloom-btn primary new-entry-btn" @onclick="() => _writing = true">
+            @T("NewEntryButton")
+        </button>
+    }
+
+    <div class="journal-entries">
+        @{ var entryIndex = 0; }
+        @foreach (var entry in _entries)
+        {
+            var eIdx = entryIndex++;
+            <div class="journal-card" style="animation-delay: @(eIdx * 0.05)s">
+                <div class="journal-card-header">
+                    <span class="entry-emoji">@(entry.MoodEmoji ?? "💗")</span>
+                    <div class="entry-meta">
+                        <strong>@entry.Title</strong>
+                        <span class="entry-date">
+                            @string.Format(T("WeekLabel"), entry.WeekOfPregnancy)
+                            @entry.CreatedAt.ToString("dd MMM yyyy")
+                        </span>
+                    </div>
+                </div>
+
+                @if (_photosByEntry.TryGetValue(entry.Id, out var photos) && photos.Any())
+                {
+                    <div class="journal-photos">
+                        @foreach (var photo in photos)
+                        {
+                            <button type="button" class="polaroid" @onclick="() => _lightboxPhoto = photo">
+                                <img src="@GetDataUri(photo)" alt="@T("AltJournalPhoto")" />
+                            </button>
+                        }
+                    </div>
+                }
+
+                <p class="entry-content">@entry.Content</p>
+            </div>
+        }
+
+        @if (!_entries.Any() && !_writing)
+        {
+            <div class="empty-journal">
+                <p>@T("EmptyJournal1")</p>
+                <p>@T("EmptyJournal2")</p>
+            </div>
+        }
+    </div>
+</div>
+
+@if (_lightboxPhoto is { } lightboxPhoto)
+{
+    <div class="photo-lightbox-backdrop" @onclick="() => _lightboxPhoto = null">
+        <div class="photo-lightbox" @onclick:stopPropagation="true">
+            <img src="@GetDataUri(lightboxPhoto)" alt="@T("AltJournalPhoto")" />
+            <div class="photo-lightbox-actions">
+                <a class="bloom-btn primary small-btn" href="@GetDataUri(lightboxPhoto)" download="journal-photo.jpg">@T("DownloadButton")</a>
+                <button type="button" class="bloom-btn secondary small-btn" @onclick="() => _lightboxPhoto = null">@T("CloseButton")</button>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private record PendingPhoto(string Base64, string ContentType);
+
+    private const long MaxFileSize = 8 * 1024 * 1024; // 8MB per photo (resized down before storage)
+    private const int MaxPhotos = 6;
+
+    private List<JournalEntry> _entries = [];
+    private Dictionary<int, List<JournalPhoto>> _photosByEntry = [];
+    private bool _writing;
+    private string _newTitle = string.Empty;
+    private string _newContent = string.Empty;
+    private string _selectedEmoji = "💗";
+    private List<PendingPhoto> _newPhotos = [];
+    private string? _photoError;
+    private JournalPhoto? _lightboxPhoto;
+    private string _language = "English";
+
+    protected override async Task OnInitializedAsync()
+    {
+        var profile = await ProfileCache.GetAsync();
+        _language = (profile?.Language ?? AppLanguage.English).ToString();
+
+        await LoadEntriesAsync();
+    }
+
+    private async Task LoadEntriesAsync()
+    {
+        var userId = await CurrentUser.GetUserIdAsync();
+        _entries = await Db.JournalEntries
+            .AsNoTracking()
+            .Where(e => e.UserId == userId)
+            .OrderByDescending(e => e.CreatedAt)
+            .ToListAsync();
+
+        var entryIds = _entries.Select(e => e.Id).ToList();
+        var photos = await Db.JournalPhotos
+            .AsNoTracking()
+            .Where(p => entryIds.Contains(p.JournalEntryId))
+            .ToListAsync();
+        _photosByEntry = photos.GroupBy(p => p.JournalEntryId).ToDictionary(g => g.Key, g => g.ToList());
+    }
+
+    private string GetDataUri(JournalPhoto photo) => $"data:{photo.ContentType};base64,{photo.ImageData}";
+
+    private async Task OnPhotosSelectedAsync(InputFileChangeEventArgs e)
+    {
+        _photoError = null;
+        foreach (var file in e.GetMultipleFiles(MaxPhotos))
+        {
+            if (_newPhotos.Count >= MaxPhotos)
+            {
+                _photoError = string.Format(T("MaxPhotosError"), MaxPhotos);
+                break;
+            }
+            if (file.Size > MaxFileSize)
+            {
+                _photoError = string.Format(T("FileTooLargeError"), file.Name);
+                continue;
+            }
+
+            try
+            {
+                using var stream = file.OpenReadStream(MaxFileSize);
+                var (base64, contentType) = await ResizeForStorageAsync(stream);
+                _newPhotos.Add(new PendingPhoto(base64, contentType));
+            }
+            catch (UnknownImageFormatException)
+            {
+                _photoError = string.Format(T("UnknownFormatError"), file.Name);
+            }
+        }
+    }
+
+    // Phone photos routinely come in at several MB and thousands of pixels
+    // across — far more than this app ever displays. Downscale to a sane
+    // viewing size and re-encode as JPEG so janani.db doesn't balloon with
+    // every photo added to a journal entry.
+    private const int MaxPhotoDimension = 1600;
+
+    private static async Task<(string Base64, string ContentType)> ResizeForStorageAsync(Stream inputStream)
+    {
+        using var image = await Image.LoadAsync(inputStream);
+
+        if (image.Width > MaxPhotoDimension || image.Height > MaxPhotoDimension)
+        {
+            image.Mutate(x => x.Resize(new ResizeOptions
+            {
+                Mode = ResizeMode.Max,
+                Size = new Size(MaxPhotoDimension, MaxPhotoDimension)
+            }));
+        }
+
+        using var output = new MemoryStream();
+        await image.SaveAsJpegAsync(output, new JpegEncoder { Quality = 80 });
+        return (Convert.ToBase64String(output.ToArray()), "image/jpeg");
+    }
+
+    private void RemovePendingPhoto(PendingPhoto photo) => _newPhotos.Remove(photo);
+
+    private async Task SaveEntryAsync()
+    {
+        var profile = await ProfileCache.GetAsync();
+        var entry = new JournalEntry
+        {
+            UserId = await CurrentUser.GetUserIdAsync(),
+            Title = string.IsNullOrWhiteSpace(_newTitle) ? T("DefaultEntryTitle") : _newTitle,
+            Content = _newContent,
+            WeekOfPregnancy = profile?.CurrentWeek ?? 1,
+            MoodEmoji = _selectedEmoji
+        };
+        Db.JournalEntries.Add(entry);
+        await Db.SaveChangesAsync();
+
+        if (_newPhotos.Any())
+        {
+            foreach (var photo in _newPhotos)
+            {
+                Db.JournalPhotos.Add(new JournalPhoto
+                {
+                    JournalEntryId = entry.Id,
+                    ImageData = photo.Base64,
+                    ContentType = photo.ContentType
+                });
+            }
+            await Db.SaveChangesAsync();
+        }
+
+        CancelWriting();
+        await LoadEntriesAsync();
+    }
+
+    private void CancelWriting()
+    {
+        _newTitle = string.Empty;
+        _newContent = string.Empty;
+        _selectedEmoji = "💗";
+        _newPhotos = [];
+        _photoError = null;
+        _writing = false;
+    }
+
+    // Same small hand-maintained-dictionary approach as Recipes.razor —
+    // covers English/Hindi/Telugu; every other profile language falls back
+    // to English.
+    private static readonly Dictionary<string, Dictionary<string, string>> Strings = new()
+    {
+        ["English"] = new()
+        {
+            ["Title"] = "📝 My Pregnancy Story",
+            ["Subtitle"] = "Every feeling, every moment. Just for you.",
+            ["TitlePlaceholder"] = "Give this moment a title...",
+            ["ContentPlaceholder"] = "What's on your heart today? What do you want to remember?",
+            ["AddPhotos"] = "📷 Add photos",
+            ["RemovePhoto"] = "Remove photo",
+            ["SaveButton"] = "Save ✨",
+            ["CancelButton"] = "Cancel",
+            ["NewEntryButton"] = "+ New entry",
+            ["WeekLabel"] = "Week {0} ·",
+            ["EmptyJournal1"] = "Your journal is waiting for its first story. 🌷",
+            ["EmptyJournal2"] = "No moment is too small to remember.",
+            ["DownloadButton"] = "⬇ Download",
+            ["CloseButton"] = "Close",
+            ["AltPreview"] = "Preview",
+            ["AltJournalPhoto"] = "Journal photo",
+            ["MaxPhotosError"] = "You can add up to {0} photos per entry.",
+            ["FileTooLargeError"] = "{0} is too large (max 8MB).",
+            ["UnknownFormatError"] = "{0} doesn't look like a photo Janani can read.",
+            ["DefaultEntryTitle"] = "Today's moment",
+        },
+        ["Hindi"] = new()
+        {
+            ["Title"] = "📝 मेरी गर्भावस्था की कहानी",
+            ["Subtitle"] = "हर एहसास, हर पल। सिर्फ आपके लिए।",
+            ["TitlePlaceholder"] = "इस पल को एक शीर्षक दें...",
+            ["ContentPlaceholder"] = "आज आपके दिल में क्या है? आप क्या याद रखना चाहती हैं?",
+            ["AddPhotos"] = "📷 फ़ोटो जोड़ें",
+            ["RemovePhoto"] = "फ़ोटो हटाएं",
+            ["SaveButton"] = "सहेजें ✨",
+            ["CancelButton"] = "रद्द करें",
+            ["NewEntryButton"] = "+ नई प्रविष्टि",
+            ["WeekLabel"] = "सप्ताह {0} ·",
+            ["EmptyJournal1"] = "आपकी डायरी अपनी पहली कहानी का इंतज़ार कर रही है। 🌷",
+            ["EmptyJournal2"] = "याद रखने के लिए कोई भी पल छोटा नहीं होता।",
+            ["DownloadButton"] = "⬇ डाउनलोड करें",
+            ["CloseButton"] = "बंद करें",
+            ["AltPreview"] = "पूर्वावलोकन",
+            ["AltJournalPhoto"] = "डायरी फ़ोटो",
+            ["MaxPhotosError"] = "आप प्रति प्रविष्टि अधिकतम {0} फ़ोटो जोड़ सकती हैं।",
+            ["FileTooLargeError"] = "{0} बहुत बड़ी है (अधिकतम 8MB)।",
+            ["UnknownFormatError"] = "{0} एक ऐसी फ़ोटो नहीं लगती जिसे जनानी पढ़ सके।",
+            ["DefaultEntryTitle"] = "आज का पल",
+        },
+        ["Telugu"] = new()
+        {
+            ["Title"] = "📝 నా గర్భధారణ కథ",
+            ["Subtitle"] = "ప్రతి భావన, ప్రతి క్షణం. మీ కోసం మాత్రమే.",
+            ["TitlePlaceholder"] = "ఈ క్షణానికి ఒక శీర్షిక ఇవ్వండి...",
+            ["ContentPlaceholder"] = "ఈరోజు మీ హృదయంలో ఏముంది? మీరు ఏమి గుర్తుంచుకోవాలనుకుంటున్నారు?",
+            ["AddPhotos"] = "📷 ఫోటోలు జోడించండి",
+            ["RemovePhoto"] = "ఫోటో తొలగించండి",
+            ["SaveButton"] = "సేవ్ చేయండి ✨",
+            ["CancelButton"] = "రద్దు చేయండి",
+            ["NewEntryButton"] = "+ కొత్త ఎంట్రీ",
+            ["WeekLabel"] = "వారం {0} ·",
+            ["EmptyJournal1"] = "మీ డైరీ తన మొదటి కథ కోసం ఎదురుచూస్తోంది. 🌷",
+            ["EmptyJournal2"] = "గుర్తుంచుకోవడానికి ఏ క్షణం చిన్నది కాదు.",
+            ["DownloadButton"] = "⬇ డౌన్‌లోడ్ చేయండి",
+            ["CloseButton"] = "మూసివేయండి",
+            ["AltPreview"] = "ప్రివ్యూ",
+            ["AltJournalPhoto"] = "డైరీ ఫోటో",
+            ["MaxPhotosError"] = "మీరు ఒక్కో ఎంట్రీకి గరిష్టంగా {0} ఫోటోలు జోడించవచ్చు.",
+            ["FileTooLargeError"] = "{0} చాలా పెద్దగా ఉంది (గరిష్టం 8MB).",
+            ["UnknownFormatError"] = "{0} జననీ చదవగలిగే ఫోటోలా కనిపించడం లేదు.",
+            ["DefaultEntryTitle"] = "ఈరోజు క్షణం",
+        },
+    };
+
+    private string T(string key) =>
+        (Strings.TryGetValue(_language, out var dict) && dict.TryGetValue(key, out var value))
+            ? value
+            : Strings["English"][key];
+}

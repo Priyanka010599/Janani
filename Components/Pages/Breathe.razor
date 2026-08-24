@@ -1,0 +1,251 @@
+@page "/breathe"
+@using Microsoft.EntityFrameworkCore
+@inject AppDbContext Db
+@inject CurrentUserService CurrentUser
+@rendermode InteractiveServer
+
+<PageTitle>Janani — Breathing Corner</PageTitle>
+
+<div class="bloom-container">
+    <div class="section-header">
+        <h1>@T("Title")</h1>
+        <p class="subtitle">@T("Subtitle")</p>
+    </div>
+
+    <div class="breathe-card">
+        <div class="pattern-selector">
+            @foreach (var pattern in _patterns)
+            {
+                <button class="pattern-btn @(_selectedPattern.Key == pattern.Key ? "selected" : "")"
+                        @onclick="() => SelectPattern(pattern)">
+                    @pattern.Emoji @T($"Pattern_{pattern.Key}_Name")
+                </button>
+            }
+        </div>
+
+        <p class="pattern-desc">@T($"Pattern_{_selectedPattern.Key}_Desc")</p>
+
+        @if (!_running)
+        {
+            <button class="bloom-btn primary start-breathe-btn" @onclick="StartAsync">
+                @T("BeginButton")
+            </button>
+        }
+        else
+        {
+            <div class="breathe-circle-wrap">
+                <div class="breathe-circle @_phase.ToLower().Replace(" ", "-")"
+                     style="animation-duration: @(_phaseDuration)s">
+                </div>
+                <div class="breathe-label">
+                    <span class="phase-text">@PhaseDisplay(_phase)</span>
+                    <span class="phase-count" @key="_countdown">@_countdown</span>
+                </div>
+            </div>
+
+            <p class="cycle-count">@string.Format(T("CycleFormat"), _cycle, _totalCycles)</p>
+
+            <button class="bloom-btn secondary" @onclick="Stop">
+                @T("StopButton")
+            </button>
+        }
+
+        @if (_done)
+        {
+            <div class="breathe-done">
+                <p>@T("DoneMessage")</p>
+                <p>@T("DoneSubtext")</p>
+            </div>
+        }
+    </div>
+
+    <div class="breathe-tips">
+        <h3>@T("TipsTitle")</h3>
+        <ul class="tips-list">
+            <li>@T("Tip1")</li>
+            <li>@T("Tip2")</li>
+            <li>@T("Tip3")</li>
+            <li>@T("Tip4")</li>
+            <li>@T("Tip5")</li>
+        </ul>
+    </div>
+</div>
+
+@code {
+    private record BreathingPattern(string Key, string Emoji,
+        int InhaleSeconds, int HoldInSeconds, int ExhaleSeconds, int HoldOutSeconds, int Cycles);
+
+    private readonly BreathingPattern[] _patterns =
+    [
+        new("478", "🌙", 4, 7, 8, 0, 4),
+        new("box", "🟦", 4, 4, 4, 4, 4),
+        new("waves", "🌊", 5, 0, 5, 0, 6),
+    ];
+
+    private BreathingPattern _selectedPattern;
+    private bool _running, _done;
+    private string _phase = "Breathe in";
+    private int _countdown, _cycle, _totalCycles;
+    private double _phaseDuration = 4;
+    private CancellationTokenSource? _cts;
+    private string _language = "English";
+
+    public Breathe() => _selectedPattern = _patterns[2]; // default: gentle waves
+
+    protected override async Task OnInitializedAsync()
+    {
+        var userId = await CurrentUser.GetUserIdAsync();
+        var profile = await Db.UserProfiles.AsNoTracking().FirstOrDefaultAsync(p => p.UserId == userId);
+        _language = (profile?.Language ?? AppLanguage.English).ToString();
+    }
+
+    private void SelectPattern(BreathingPattern p)
+    {
+        if (_running) Stop();
+        _selectedPattern = p;
+        _done = false;
+    }
+
+    private async Task StartAsync()
+    {
+        _cts = new CancellationTokenSource();
+        _running = true;
+        _done = false;
+        _cycle = 0;
+        _totalCycles = _selectedPattern.Cycles;
+
+        try
+        {
+            while (_cycle < _totalCycles && !_cts.Token.IsCancellationRequested)
+            {
+                _cycle++;
+                await RunPhase("Breathe in", _selectedPattern.InhaleSeconds, _cts.Token);
+                if (_selectedPattern.HoldInSeconds > 0)
+                    await RunPhase("Hold", _selectedPattern.HoldInSeconds, _cts.Token);
+                await RunPhase("Breathe out", _selectedPattern.ExhaleSeconds, _cts.Token);
+                if (_selectedPattern.HoldOutSeconds > 0)
+                    await RunPhase("Hold", _selectedPattern.HoldOutSeconds, _cts.Token);
+            }
+        }
+        catch (OperationCanceledException) { }
+
+        _running = false;
+        _done = !_cts.IsCancellationRequested;
+        StateHasChanged();
+    }
+
+    private async Task RunPhase(string phase, int seconds, CancellationToken ct)
+    {
+        _phase = phase;
+        _phaseDuration = seconds;
+        for (_countdown = seconds; _countdown > 0; _countdown--)
+        {
+            StateHasChanged();
+            await Task.Delay(1000, ct);
+        }
+    }
+
+    private void Stop()
+    {
+        _cts?.Cancel();
+        _running = false;
+        _done = false;
+    }
+
+    // _phase drives the CSS animation class (see breathe-circle above) so it
+    // stays an internal English key; this maps it to display text only.
+    private string PhaseDisplay(string phase) => phase switch
+    {
+        "Breathe in" => T("PhaseIn"),
+        "Hold" => T("PhaseHold"),
+        "Breathe out" => T("PhaseOut"),
+        _ => phase
+    };
+
+    // Same small hand-maintained-dictionary approach as Recipes.razor —
+    // covers English/Hindi/Telugu; every other profile language falls back
+    // to English.
+    private static readonly Dictionary<string, Dictionary<string, string>> Strings = new()
+    {
+        ["English"] = new()
+        {
+            ["Title"] = "🧘 Calm Corner",
+            ["Subtitle"] = "A quiet space, just for you. Take as long as you need.",
+            ["Pattern_478_Name"] = "4-7-8",
+            ["Pattern_478_Desc"] = "Calming. Breathe in 4, hold 7, breathe out 8. Helps with anxiety and sleep.",
+            ["Pattern_box_Name"] = "Box Breathing",
+            ["Pattern_box_Desc"] = "Grounding. Equal counts of 4. Steadies the mind and body.",
+            ["Pattern_waves_Name"] = "Gentle Waves",
+            ["Pattern_waves_Desc"] = "Slow and easy. 5 seconds in, 5 seconds out. Perfect for beginners.",
+            ["BeginButton"] = "Begin 🌸",
+            ["StopButton"] = "Stop",
+            ["PhaseIn"] = "Breathe in",
+            ["PhaseHold"] = "Hold",
+            ["PhaseOut"] = "Breathe out",
+            ["CycleFormat"] = "Cycle {0} of {1}",
+            ["DoneMessage"] = "✨ Well done. You gave yourself a moment of peace.",
+            ["DoneSubtext"] = "Take your time before moving on.",
+            ["TipsTitle"] = "💚 When breathing helps most",
+            ["Tip1"] = "When anxiety feels overwhelming — breathe first, think after.",
+            ["Tip2"] = "Before a doctor's appointment to settle nerves.",
+            ["Tip3"] = "At 3am when sleep won't come.",
+            ["Tip4"] = "Whenever you need to feel your body again.",
+            ["Tip5"] = "During Braxton Hicks — slow breathing eases them.",
+        },
+        ["Hindi"] = new()
+        {
+            ["Title"] = "🧘 शांति का कोना",
+            ["Subtitle"] = "एक शांत जगह, सिर्फ आपके लिए। जितना समय चाहिए उतना लें।",
+            ["Pattern_478_Name"] = "4-7-8",
+            ["Pattern_478_Desc"] = "शांतिदायक। 4 तक सांस लें, 7 तक रोकें, 8 तक छोड़ें। चिंता और नींद में मदद करता है।",
+            ["Pattern_box_Name"] = "बॉक्स ब्रीदिंग",
+            ["Pattern_box_Desc"] = "स्थिरता देने वाला। हर चरण 4 गिनती का। मन और शरीर को स्थिर करता है।",
+            ["Pattern_waves_Name"] = "कोमल लहरें",
+            ["Pattern_waves_Desc"] = "धीमी और सरल। 5 सेकंड अंदर, 5 सेकंड बाहर। शुरुआत करने वालों के लिए एकदम सही।",
+            ["BeginButton"] = "शुरू करें 🌸",
+            ["StopButton"] = "रोकें",
+            ["PhaseIn"] = "सांस लें",
+            ["PhaseHold"] = "रोकें",
+            ["PhaseOut"] = "सांस छोड़ें",
+            ["CycleFormat"] = "चक्र {0} / {1}",
+            ["DoneMessage"] = "✨ बहुत बढ़िया। आपने खुद को शांति का एक पल दिया।",
+            ["DoneSubtext"] = "आगे बढ़ने से पहले अपना समय लें।",
+            ["TipsTitle"] = "💚 सांस लेना कब सबसे ज्यादा मदद करता है",
+            ["Tip1"] = "जब चिंता भारी लगे — पहले सांस लें, फिर सोचें।",
+            ["Tip2"] = "डॉक्टर की अपॉइंटमेंट से पहले नसों को शांत करने के लिए।",
+            ["Tip3"] = "रात 3 बजे जब नींद न आए।",
+            ["Tip4"] = "जब भी आपको अपने शरीर को फिर से महसूस करने की जरूरत हो।",
+            ["Tip5"] = "ब्रैक्सटन हिक्स के दौरान — धीमी सांस उन्हें आराम देती है।",
+        },
+        ["Telugu"] = new()
+        {
+            ["Title"] = "🧘 ప్రశాంత మూల",
+            ["Subtitle"] = "మీ కోసం మాత్రమే ఒక నిశ్శబ్ద స్థలం. మీకు కావలసినంత సమయం తీసుకోండి.",
+            ["Pattern_478_Name"] = "4-7-8",
+            ["Pattern_478_Desc"] = "ప్రశాంతత కలిగిస్తుంది. 4కి ఊపిరి పీల్చుకోండి, 7కి ఆపండి, 8కి వదలండి. ఆందోళన మరియు నిద్రకు సహాయపడుతుంది.",
+            ["Pattern_box_Name"] = "బాక్స్ బ్రీతింగ్",
+            ["Pattern_box_Desc"] = "స్థిరత్వాన్నిస్తుంది. ప్రతి దశ 4 లెక్కలు. మనసు మరియు శరీరాన్ని స్థిరపరుస్తుంది.",
+            ["Pattern_waves_Name"] = "సున్నితమైన అలలు",
+            ["Pattern_waves_Desc"] = "నెమ్మదిగా మరియు సులభంగా. 5 సెకన్లు లోపలికి, 5 సెకన్లు బయటకు. ప్రారంభకులకు సరైనది.",
+            ["BeginButton"] = "ప్రారంభించండి 🌸",
+            ["StopButton"] = "ఆపండి",
+            ["PhaseIn"] = "ఊపిరి పీల్చుకోండి",
+            ["PhaseHold"] = "ఆపండి",
+            ["PhaseOut"] = "ఊపిరి వదలండి",
+            ["CycleFormat"] = "చక్రం {0} / {1}",
+            ["DoneMessage"] = "✨ చాలా బాగుంది. మీరు మీకు ప్రశాంతత క్షణాన్ని ఇచ్చారు.",
+            ["DoneSubtext"] = "ముందుకు వెళ్లే ముందు మీ సమయం తీసుకోండి.",
+            ["TipsTitle"] = "💚 శ్వాస ఎప్పుడు ఎక్కువగా సహాయపడుతుంది",
+            ["Tip1"] = "ఆందోళన మీద మీద అనిపించినప్పుడు — ముందు శ్వాస తీసుకోండి, తర్వాత ఆలోచించండి.",
+            ["Tip2"] = "డాక్టర్ అపాయింట్‌మెంట్‌కు ముందు నరాలను శాంతపరచడానికి.",
+            ["Tip3"] = "తెల్లవారుజామున 3 గంటలకు నిద్ర రానప్పుడు.",
+            ["Tip4"] = "మీ శరీరాన్ని మళ్లీ అనుభూతి చెందాల్సి వచ్చినప్పుడల్లా.",
+            ["Tip5"] = "బ్రాక్స్‌టన్ హిక్స్ సమయంలో — నెమ్మదైన శ్వాస వాటిని తగ్గిస్తుంది.",
+        },
+    };
+
+    private string T(string key) =>
+        (Strings.TryGetValue(_language, out var dict) && dict.TryGetValue(key, out var value))
+            ? value
+            : Strings["English"][key];
+}

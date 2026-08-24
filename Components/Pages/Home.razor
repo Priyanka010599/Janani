@@ -1,0 +1,412 @@
+@page "/"
+@attribute [AllowAnonymous]
+@using Janani.Models
+@using Janani.Services
+@using Janani.Data
+@using Microsoft.AspNetCore.Components.Authorization
+@inject BloomAgentRegistry Agents
+@inject AppDbContext Db
+@inject UserProfileCache ProfileCache
+@inject CurrentUserService CurrentUser
+@implements IDisposable
+@rendermode InteractiveServer
+
+<PageTitle>Janani — Family Care Companion</PageTitle>
+
+@if (!_isAuthenticated)
+{
+    <div class="bloom-container landing-page">
+        <div class="landing-hero">
+            <h1>🌸 Janani</h1>
+            <p class="landing-tagline">@T("Tagline")</p>
+            <p class="subtitle">
+                @T("LandingSubtitle")
+            </p>
+            <div class="form-actions">
+                <a class="bloom-btn primary" href="/login">@T("LogInBtn")</a>
+                <a class="bloom-btn secondary" href="/register">@T("CreateAccountBtn")</a>
+            </div>
+        </div>
+
+        <div class="plan-card">
+            <h3>🩺 @T("EngDecisionTitle")</h3>
+            <p>
+                @T("EngDecisionText")
+            </p>
+        </div>
+
+        <div class="plan-card">
+            <h3>🌷 @T("WhatsInsideTitle")</h3>
+            <ul class="suggestion-list">
+                <li>@T("WhatsInside1")</li>
+                <li>@T("WhatsInside2")</li>
+                <li>@T("WhatsInside3")</li>
+                <li>@T("WhatsInside4")</li>
+                <li>@T("WhatsInside5")</li>
+                <li>@T("WhatsInside6")</li>
+                <li>@T("WhatsInside7")</li>
+            </ul>
+        </div>
+    </div>
+}
+else
+{
+<div class="bloom-container">
+    @if (_profile != null && !_profile.TracksPregnancy)
+    {
+        <div class="section-header">
+            <h1>@string.Format(T("WelcomeBack"), _profile.Name)</h1>
+            <p class="subtitle">@T("CaregiverSubtitle")</p>
+        </div>
+        <div class="feeling-grid">
+            @if (_profile.CaresForElder)
+            {
+                <a class="feeling-btn" href="/elder-care"><span>🌼</span><span class="feeling-label">@T("ElderCareLabel")</span></a>
+            }
+            @if (_profile.CaresForInfant)
+            {
+                <a class="feeling-btn" href="/infant-care"><span>👶</span><span class="feeling-label">@T("InfantCareLabel")</span></a>
+            }
+            <a class="feeling-btn" href="/family-care"><span>👨‍👩‍👧</span><span class="feeling-label">@T("FamilyCareLabel")</span></a>
+        </div>
+    }
+    else if (!_planGenerated)
+    {
+        <div class="mood-checkin">
+            <div class="greeting">
+                <span class="week-badge">@string.Format(T("WeekBadge"), _profile?.CurrentWeek)</span>
+                <h1>@string.Format(T("HowFeeling"), _profile?.Name ?? "Mama")</h1>
+                <p class="subtitle">@T("NoWrongAnswer")</p>
+            </div>
+
+            <div class="mood-grid">
+                @{ var moodIndex = 0; }
+                @foreach (var mood in Enum.GetValues<MoodType>())
+                {
+                    var idx = moodIndex++;
+                    <button class="mood-btn @(_selectedMood == mood ? "selected" : "")"
+                            style="animation-delay: @(idx * 0.04)s"
+                            @onclick="() => _selectedMood = mood">
+                        <span class="mood-emoji">@MoodEmoji(mood)</span>
+                        <span class="mood-label">@MoodLabel(mood)</span>
+                    </button>
+                }
+            </div>
+
+            <div class="note-section">
+                <label>@T("ShareMoreLabel")</label>
+                <textarea @bind="_additionalNote"
+                          placeholder="@T("ShareMorePlaceholder")"
+                          rows="2"></textarea>
+            </div>
+
+            <button class="bloom-btn primary" @onclick="GeneratePlanAsync"
+                    disabled="@(_selectedMood == null || _generating)">
+                @if (_generating)
+                { <span>@T("CreatingPlan")</span> }
+                else
+                { <span>@T("CreateMyDayBtn")</span> }
+            </button>
+
+            @if (_error != null)
+            {
+                <div class="meal-gentle-note error-note">
+                    <p>💗 @_error</p>
+                    <button class="bloom-btn secondary small-btn" @onclick="GeneratePlanAsync">@T("TryAgain")</button>
+                </div>
+            }
+        </div>
+    }
+    else if (_plan != null)
+    {
+        <div class="daily-plan">
+            <div class="plan-header">
+                <span class="week-badge">@string.Format(T("WeekBadge"), _profile?.CurrentWeek)</span>
+                <h2>@string.Format(T("GentlePlanTitle"), MoodEmoji(_selectedMood!.Value))</h2>
+            </div>
+
+            <div class="plan-card acknowledgment">
+                <p>@_plan.Acknowledgment</p>
+            </div>
+
+            <div class="plan-section">
+                <h3>💧 @T("ForYouToday")</h3>
+                <ul class="suggestion-list">
+                    @foreach (var s in _plan.Suggestions)
+                    {
+                        <li>@s</li>
+                    }
+                </ul>
+            </div>
+
+            <div class="plan-card calming">
+                <h3>🎵 @T("MomentOfCalm")</h3>
+                <p>@_plan.CalmingRecommendation</p>
+            </div>
+
+            <div class="plan-card week-note">
+                <h3>@string.Format(T("WeekHeading"), _profile?.CurrentWeek)</h3>
+                <p>@_plan.WeekNote</p>
+            </div>
+
+            <div class="plan-card affirmation">
+                <p class="affirmation-text">❤️ @_plan.Affirmation</p>
+            </div>
+
+            <RecommendedReading Topic="@(_profile?.CurrentWeek >= 34 ? "labor-delivery" : "pregnancy-general")" />
+
+            <button class="bloom-btn secondary checkin-again-btn" @onclick="Reset">
+                @T("CheckInAgain")
+            </button>
+        </div>
+    }
+</div>
+}
+
+@code {
+    [CascadingParameter] private Task<AuthenticationState>? AuthStateTask { get; set; }
+
+    private UserProfile? _profile;
+    private bool _isAuthenticated;
+    private MoodType? _selectedMood;
+    private string? _additionalNote;
+    private DailyPlan? _plan;
+    private bool _generating;
+    private bool _planGenerated;
+    private string? _error;
+    private CancellationTokenSource? _cts;
+    private string _language = "English";
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (AuthStateTask != null)
+        {
+            var authState = await AuthStateTask;
+            _isAuthenticated = authState.User.Identity?.IsAuthenticated ?? false;
+        }
+
+        if (_isAuthenticated)
+        {
+            _profile = await ProfileCache.GetAsync();
+            _language = (_profile?.Language ?? AppLanguage.English).ToString();
+        }
+    }
+
+    private async Task GeneratePlanAsync()
+    {
+        if (_selectedMood == null || _profile == null) return;
+        _generating = true;
+        _error = null;
+        StateHasChanged();
+
+        _cts?.Cancel();
+        _cts = new CancellationTokenSource();
+
+        try
+        {
+            var ctx = new AgentContext(_profile.Name, _profile.CurrentWeek, _profile.Language, _profile.WorkingWomanMode);
+            _plan = await Agents.DayNurture.GenerateDailyPlanAsync(
+                _selectedMood.Value,
+                ctx,
+                _additionalNote,
+                _cts.Token);
+
+            // Persist the check-in
+            Db.MoodCheckIns.Add(new MoodCheckIn
+            {
+                UserId = await CurrentUser.GetUserIdAsync(),
+                Mood = _selectedMood.Value,
+                AdditionalNote = _additionalNote,
+                GeneratedPlan = _plan.Acknowledgment
+            });
+            await Db.SaveChangesAsync();
+
+            _planGenerated = true;
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception)
+        {
+            _error = T("GenericRetryError");
+        }
+
+        _generating = false;
+    }
+
+    private void Reset()
+    {
+        _selectedMood = null;
+        _additionalNote = null;
+        _plan = null;
+        _planGenerated = false;
+        _error = null;
+    }
+
+    public void Dispose() => _cts?.Cancel();
+
+    private static string MoodEmoji(MoodType mood) => mood switch
+    {
+        MoodType.Exhausted   => "😴",
+        MoodType.Anxious     => "😟",
+        MoodType.Nauseous    => "🤢",
+        MoodType.Emotional   => "🥺",
+        MoodType.Happy       => "😊",
+        MoodType.Energetic   => "✨",
+        MoodType.Overwhelmed => "😮‍💨",
+        MoodType.Peaceful    => "🌿",
+        _                    => "💗"
+    };
+
+    private string MoodLabel(MoodType mood) => mood switch
+    {
+        MoodType.Exhausted   => T("MoodExhausted"),
+        MoodType.Anxious     => T("MoodAnxious"),
+        MoodType.Nauseous    => T("MoodNauseous"),
+        MoodType.Emotional   => T("MoodEmotional"),
+        MoodType.Happy       => T("MoodHappy"),
+        MoodType.Energetic   => T("MoodEnergetic"),
+        MoodType.Overwhelmed => T("MoodOverwhelmed"),
+        MoodType.Peaceful    => T("MoodPeaceful"),
+        _                    => mood.ToString()
+    };
+
+    private static readonly Dictionary<string, Dictionary<string, string>> Strings = new()
+    {
+        ["English"] = new()
+        {
+            ["Tagline"] = "Built for the working, pregnant woman who is never caring for just herself.",
+            ["LandingSubtitle"] = "She's managing a career and a pregnancy — and very often an aging parent, a newborn, or both. Janani unifies that reality into one system instead of a different single-purpose app for each person she cares for.",
+            ["LogInBtn"] = "Log in",
+            ["CreateAccountBtn"] = "Create an account",
+            ["EngDecisionTitle"] = "The engineering decision that matters most",
+            ["EngDecisionText"] = "A plain, deterministic checker — not an LLM — decides when a vitals reading or a growth trend is genuinely dangerous. AI agents are only ever invoked to explain a concern that's already been flagged, never to decide whether one exists. When something crosses that line, every caregiver with shared access is notified, and the family's doctor is automatically emailed — without anyone having to notice the problem first.",
+            ["WhatsInsideTitle"] = "What's inside",
+            ["WhatsInside1"] = "Pregnancy, elder care, and infant care in one shared account — with real-time sharing across caregivers",
+            ["WhatsInside2"] = "Nine specialized AI agents (Google ADK on Vertex AI) for meal planning, companion chat, daily guidance, and more",
+            ["WhatsInside3"] = "Cross-generational SOS, automatic doctor escalation, and push notifications for critical alerts",
+            ["WhatsInside4"] = "Real BigQuery-backed reading recommendations, ranked by actual public ratings — not an LLM guess",
+            ["WhatsInside5"] = "Vaccination tracking, growth/vitals trend charts, doctor-visit PDF export",
+            ["WhatsInside6"] = "Available as a web app, installable PWA, and native Android app",
+            ["WhatsInside7"] = "Multi-language support across every agent",
+            ["WelcomeBack"] = "Welcome back, {0} 🌼",
+            ["CaregiverSubtitle"] = "You're set up as a caregiver. Head to Elder Care, Infant Care, or Family Care to get started — or turn pregnancy tracking back on any time in your Profile.",
+            ["ElderCareLabel"] = "Elder Care",
+            ["InfantCareLabel"] = "Infant Care",
+            ["FamilyCareLabel"] = "Family Care",
+            ["WeekBadge"] = "Week {0}",
+            ["HowFeeling"] = "How are you feeling today, {0}? 🌷",
+            ["NoWrongAnswer"] = "There's no wrong answer. Just tell me how you really are.",
+            ["ShareMoreLabel"] = "Anything else you'd like to share? (optional)",
+            ["ShareMorePlaceholder"] = "I'm worried about... / I had a bad night... / I'm excited about...",
+            ["CreatingPlan"] = "Creating your plan... 💗",
+            ["CreateMyDayBtn"] = "Create my day 🌸",
+            ["TryAgain"] = "Try again",
+            ["GentlePlanTitle"] = "Your gentle plan for today {0}",
+            ["ForYouToday"] = "For you today",
+            ["MomentOfCalm"] = "A moment of calm",
+            ["WeekHeading"] = "🌱 Week {0}",
+            ["CheckInAgain"] = "Check in again",
+            ["GenericRetryError"] = "That took a wrong turn — could you try again?",
+            ["MoodExhausted"] = "Exhausted",
+            ["MoodAnxious"] = "Anxious",
+            ["MoodNauseous"] = "Nauseous",
+            ["MoodEmotional"] = "Emotional",
+            ["MoodHappy"] = "Happy",
+            ["MoodEnergetic"] = "Energetic",
+            ["MoodOverwhelmed"] = "Overwhelmed",
+            ["MoodPeaceful"] = "Peaceful",
+        },
+        ["Hindi"] = new()
+        {
+            ["Tagline"] = "उस कामकाजी, गर्भवती महिला के लिए बनाया गया जो कभी सिर्फ अपनी ही देखभाल नहीं कर रही होती।",
+            ["LandingSubtitle"] = "वह करियर और गर्भावस्था दोनों संभाल रही है — और अक्सर बुज़ुर्ग माता-पिता, नवजात शिशु, या दोनों की भी। जनानी इस वास्तविकता को एक ही सिस्टम में समेटती है, बजाय इसके कि हर व्यक्ति के लिए एक अलग ऐप इस्तेमाल किया जाए।",
+            ["LogInBtn"] = "लॉग इन करें",
+            ["CreateAccountBtn"] = "खाता बनाएं",
+            ["EngDecisionTitle"] = "सबसे महत्वपूर्ण इंजीनियरिंग निर्णय",
+            ["EngDecisionText"] = "एक सामान्य, निश्चयात्मक जांचकर्ता — न कि कोई LLM — यह तय करता है कि वाइटल्स रीडिंग या विकास का रुझान वाकई खतरनाक है या नहीं। AI एजेंट्स को केवल तभी बुलाया जाता है जब कोई चिंता पहले से ही चिह्नित हो चुकी हो, ताकि उसे समझाया जा सके — यह तय करने के लिए कभी नहीं कि कोई चिंता मौजूद है या नहीं। जब कुछ उस सीमा को पार करता है, तो साझा पहुंच रखने वाले हर देखभालकर्ता को सूचित किया जाता है, और परिवार के डॉक्टर को स्वतः ईमेल भेजा जाता है — बिना किसी को पहले समस्या पर ध्यान देने की ज़रूरत के।",
+            ["WhatsInsideTitle"] = "इसमें क्या है",
+            ["WhatsInside1"] = "गर्भावस्था, बुज़ुर्ग देखभाल और शिशु देखभाल एक ही साझा खाते में — देखभालकर्ताओं के बीच रीयल-टाइम साझाकरण के साथ",
+            ["WhatsInside2"] = "भोजन योजना, साथी चैट, दैनिक मार्गदर्शन और अधिक के लिए नौ विशेष AI एजेंट्स (Google ADK on Vertex AI)",
+            ["WhatsInside3"] = "क्रॉस-जनरेशनल SOS, स्वचालित डॉक्टर एस्केलेशन, और गंभीर अलर्ट के लिए पुश नोटिफिकेशन",
+            ["WhatsInside4"] = "असली BigQuery-आधारित रीडिंग सिफारिशें, वास्तविक सार्वजनिक रेटिंग के आधार पर — किसी LLM के अनुमान से नहीं",
+            ["WhatsInside5"] = "टीकाकरण ट्रैकिंग, विकास/वाइटल्स रुझान चार्ट, डॉक्टर-विज़िट पीडीएफ एक्सपोर्ट",
+            ["WhatsInside6"] = "एक वेब ऐप, इंस्टॉल करने योग्य PWA, और नेटिव Android ऐप के रूप में उपलब्ध",
+            ["WhatsInside7"] = "हर एजेंट में बहु-भाषा समर्थन",
+            ["WelcomeBack"] = "वापसी पर स्वागत है, {0} 🌼",
+            ["CaregiverSubtitle"] = "आप एक देखभालकर्ता के रूप में सेट हैं। शुरू करने के लिए एल्डर केयर, इन्फैंट केयर, या फैमिली केयर पर जाएं — या अपनी प्रोफ़ाइल में कभी भी गर्भावस्था ट्रैकिंग फिर से चालू करें।",
+            ["ElderCareLabel"] = "बुज़ुर्ग देखभाल",
+            ["InfantCareLabel"] = "शिशु देखभाल",
+            ["FamilyCareLabel"] = "पारिवारिक देखभाल",
+            ["WeekBadge"] = "सप्ताह {0}",
+            ["HowFeeling"] = "आज आप कैसा महसूस कर रही हैं, {0}? 🌷",
+            ["NoWrongAnswer"] = "कोई गलत जवाब नहीं है। बस मुझे बताएं कि आप वाकई कैसी हैं।",
+            ["ShareMoreLabel"] = "कुछ और साझा करना चाहेंगी? (वैकल्पिक)",
+            ["ShareMorePlaceholder"] = "मुझे चिंता है... / मेरी रात खराब रही... / मैं उत्साहित हूं...",
+            ["CreatingPlan"] = "आपकी योजना बन रही है... 💗",
+            ["CreateMyDayBtn"] = "मेरा दिन बनाएं 🌸",
+            ["TryAgain"] = "फिर से कोशिश करें",
+            ["GentlePlanTitle"] = "आज के लिए आपकी सौम्य योजना {0}",
+            ["ForYouToday"] = "आज आपके लिए",
+            ["MomentOfCalm"] = "शांति का एक पल",
+            ["WeekHeading"] = "🌱 सप्ताह {0}",
+            ["CheckInAgain"] = "फिर से चेक इन करें",
+            ["GenericRetryError"] = "कुछ गड़बड़ हो गई — क्या आप फिर से कोशिश कर सकती हैं?",
+            ["MoodExhausted"] = "थकी हुई",
+            ["MoodAnxious"] = "चिंतित",
+            ["MoodNauseous"] = "जी मिचलाना",
+            ["MoodEmotional"] = "भावुक",
+            ["MoodHappy"] = "खुश",
+            ["MoodEnergetic"] = "ऊर्जावान",
+            ["MoodOverwhelmed"] = "अभिभूत",
+            ["MoodPeaceful"] = "शांत",
+        },
+        ["Telugu"] = new()
+        {
+            ["Tagline"] = "కేవలం తనను తాను మాత్రమే సంరక్షించుకోని, ఉద్యోగం చేసే గర్భవతి మహిళ కోసం రూపొందించబడింది.",
+            ["LandingSubtitle"] = "ఆమె కెరీర్ మరియు గర్భధారణ రెండింటినీ నిర్వహిస్తోంది — తరచుగా వృద్ధాప్య తల్లిదండ్రిని, నవజాత శిశువును, లేదా రెండింటినీ కూడా. జననీ ఈ వాస్తవికతను ఒకే వ్యవస్థలో ఏకం చేస్తుంది, ఆమె సంరక్షణ చేసే ప్రతి వ్యక్తికి వేరే యాప్ ఉపయోగించే బదులు.",
+            ["LogInBtn"] = "లాగిన్ చేయండి",
+            ["CreateAccountBtn"] = "ఖాతా సృష్టించండి",
+            ["EngDecisionTitle"] = "అత్యంత ముఖ్యమైన ఇంజనీరింగ్ నిర్ణయం",
+            ["EngDecisionText"] = "ఒక సాధారణ, నిర్ధారిత తనిఖీదారు — LLM కాదు — వైటల్స్ రీడింగ్ లేదా ఎదుగుదల ధోరణి నిజంగా ప్రమాదకరమా అని నిర్ణయిస్తుంది. AI ఏజెంట్లు ఇప్పటికే గుర్తించిన ఆందోళనను వివరించడానికి మాత్రమే పిలవబడతాయి, ఆందోళన ఉందా లేదా అని నిర్ణయించడానికి ఎప్పుడూ కాదు. ఏదైనా ఆ హద్దును దాటినప్పుడు, భాగస్వామ్య యాక్సెస్ ఉన్న ప్రతి సంరక్షకుడికి తెలియజేయబడుతుంది, మరియు కుటుంబ డాక్టర్‌కి స్వయంచాలకంగా ఇమెయిల్ పంపబడుతుంది — ఎవరూ ముందుగా సమస్యను గమనించాల్సిన అవసరం లేకుండా.",
+            ["WhatsInsideTitle"] = "ఇందులో ఏముంది",
+            ["WhatsInside1"] = "గర్భధారణ, వృద్ధుల సంరక్షణ మరియు శిశు సంరక్షణ ఒకే భాగస్వామ్య ఖాతాలో — సంరక్షకుల మధ్య రియల్-టైమ్ షేరింగ్‌తో",
+            ["WhatsInside2"] = "భోజన ప్రణాళిక, కంపానియన్ చాట్, రోజువారీ మార్గదర్శకత్వం మరియు మరిన్నింటి కోసం తొమ్మిది ప్రత్యేక AI ఏజెంట్లు (Google ADK on Vertex AI)",
+            ["WhatsInside3"] = "క్రాస్-జనరేషనల్ SOS, స్వయంచాలక డాక్టర్ ఎస్కలేషన్, మరియు తీవ్రమైన హెచ్చరికల కోసం పుష్ నోటిఫికేషన్లు",
+            ["WhatsInside4"] = "నిజమైన BigQuery-ఆధారిత రీడింగ్ సిఫార్సులు, వాస్తవ పబ్లిక్ రేటింగ్‌ల ఆధారంగా — LLM ఊహ కాదు",
+            ["WhatsInside5"] = "టీకా ట్రాకింగ్, ఎదుగుదల/వైటల్స్ ధోరణి చార్టులు, డాక్టర్-విజిట్ PDF ఎగుమతి",
+            ["WhatsInside6"] = "వెబ్ యాప్‌గా, ఇన్‌స్టాల్ చేయదగిన PWAగా, మరియు నేటివ్ Android యాప్‌గా అందుబాటులో ఉంది",
+            ["WhatsInside7"] = "ప్రతి ఏజెంట్‌లో బహుళ-భాషా మద్దతు",
+            ["WelcomeBack"] = "తిరిగి స్వాగతం, {0} 🌼",
+            ["CaregiverSubtitle"] = "మీరు సంరక్షకురాలిగా సెటప్ చేయబడ్డారు. ప్రారంభించడానికి ఎల్డర్ కేర్, ఇన్ఫెంట్ కేర్, లేదా ఫ్యామిలీ కేర్‌కి వెళ్ళండి — లేదా మీ ప్రొఫైల్‌లో ఎప్పుడైనా గర్భధారణ ట్రాకింగ్‌ను తిరిగి ఆన్ చేయండి.",
+            ["ElderCareLabel"] = "వృద్ధుల సంరక్షణ",
+            ["InfantCareLabel"] = "శిశు సంరక్షణ",
+            ["FamilyCareLabel"] = "కుటుంబ సంరక్షణ",
+            ["WeekBadge"] = "వారం {0}",
+            ["HowFeeling"] = "ఈరోజు మీరు ఎలా భావిస్తున్నారు, {0}? 🌷",
+            ["NoWrongAnswer"] = "తప్పు సమాధానం అంటూ ఏదీ లేదు. మీరు నిజంగా ఎలా ఉన్నారో నాకు చెప్పండి.",
+            ["ShareMoreLabel"] = "మరేదైనా పంచుకోవాలనుకుంటున్నారా? (ఐచ్ఛికం)",
+            ["ShareMorePlaceholder"] = "నాకు దీని గురించి ఆందోళనగా ఉంది... / నాకు రాత్రి బాగా గడవలేదు... / నేను ఉత్సాహంగా ఉన్నాను...",
+            ["CreatingPlan"] = "మీ ప్రణాళిక తయారవుతోంది... 💗",
+            ["CreateMyDayBtn"] = "నా రోజును సృష్టించండి 🌸",
+            ["TryAgain"] = "మళ్ళీ ప్రయత్నించండి",
+            ["GentlePlanTitle"] = "ఈరోజు కోసం మీ సున్నితమైన ప్రణాళిక {0}",
+            ["ForYouToday"] = "ఈరోజు మీ కోసం",
+            ["MomentOfCalm"] = "ప్రశాంతత క్షణం",
+            ["WeekHeading"] = "🌱 వారం {0}",
+            ["CheckInAgain"] = "మళ్ళీ చెక్ ఇన్ చేయండి",
+            ["GenericRetryError"] = "ఏదో తప్పు జరిగింది — దయచేసి మళ్ళీ ప్రయత్నించగలరా?",
+            ["MoodExhausted"] = "అలసిపోయాను",
+            ["MoodAnxious"] = "ఆందోళనగా",
+            ["MoodNauseous"] = "వికారంగా",
+            ["MoodEmotional"] = "భావోద్వేగంగా",
+            ["MoodHappy"] = "సంతోషంగా",
+            ["MoodEnergetic"] = "శక్తివంతంగా",
+            ["MoodOverwhelmed"] = "ముంచెత్తినట్లు",
+            ["MoodPeaceful"] = "ప్రశాంతంగా",
+        },
+    };
+
+    private string T(string key) =>
+        (Strings.TryGetValue(_language, out var dict) && dict.TryGetValue(key, out var value))
+            ? value
+            : Strings["English"][key];
+}

@@ -1,0 +1,246 @@
+@page "/birthplan"
+@using Janani.Services
+@inject BloomAgentRegistry Agents
+@inject UserProfileCache ProfileCache
+@implements IDisposable
+@rendermode InteractiveServer
+
+<PageTitle>Janani — Birth Plan Builder</PageTitle>
+
+<div class="bloom-container">
+    <div class="section-header">
+        <h1>📋 @T("Title")</h1>
+        <p class="subtitle">
+            @T("Subtitle")
+        </p>
+    </div>
+
+    @if (!_started)
+    {
+        <div class="birthplan-intro">
+            <div class="intro-card">
+                <h3>@T("HowThisWorks")</h3>
+                <p>@T("IntroBefore") @Agents.BirthPlan.TotalSteps @T("IntroAfter")</p>
+                <p class="intro-note">
+                    💗 @T("IntroNote")
+                </p>
+            </div>
+            <button class="bloom-btn primary" @onclick="Start">
+                @T("LetsBegin")
+            </button>
+        </div>
+    }
+    else if (!Agents.BirthPlan.IsComplete)
+    {
+        <div class="birthplan-progress">
+            <div class="progress-bar-wrap">
+                <div class="progress-bar"
+                     style="width: @(((Agents.BirthPlan.CurrentStepNumber - 1) * 100) / Agents.BirthPlan.TotalSteps)%">
+                </div>
+            </div>
+            <span class="progress-label">@T("Step") @Agents.BirthPlan.CurrentStepNumber @T("Of") @Agents.BirthPlan.TotalSteps</span>
+        </div>
+
+        <div class="birthplan-question">
+            <div class="bloom-question-bubble" @key="Agents.BirthPlan.CurrentStepNumber">
+                🌸 @(_agentResponse ?? Agents.BirthPlan.CurrentQuestion)
+            </div>
+
+            <div class="form-field" style="margin-top:1rem;">
+                <div class="input-with-voice">
+                    <textarea @bind="_currentAnswer"
+                              placeholder="@T("AnswerPlaceholder")"
+                              rows="4"></textarea>
+                    <VoiceInput OnTranscript="t => _currentAnswer = t" />
+                </div>
+            </div>
+
+            <button class="bloom-btn primary" @onclick="SubmitAnswerAsync"
+                    disabled="@(string.IsNullOrWhiteSpace(_currentAnswer) || _processing)">
+                @(_processing ? T("Processing") : T("Next"))
+            </button>
+        </div>
+    }
+    else
+    {
+        <div class="birthplan-complete">
+            <div class="complete-header">
+                <h2>✨ @T("YourBirthPlan")</h2>
+                <p>@T("PlanIntro")</p>
+            </div>
+            <div class="plan-document">
+                @_planDocument
+                @if (_generatingPlan)
+                {
+                    <span class="typing-dot">▋</span>
+                }
+            </div>
+            @if (!_generatingPlan)
+            {
+                <div class="form-actions" style="margin-top:1rem;">
+                    <button class="bloom-btn secondary" @onclick="ResetPlan">@T("StartOver")</button>
+                </div>
+            }
+        </div>
+    }
+</div>
+
+@code {
+    private bool _started;
+    private bool _processing;
+    private bool _generatingPlan;
+    private string _currentAnswer = string.Empty;
+    private string? _agentResponse;
+    private string _planDocument = string.Empty;
+    private CancellationTokenSource? _cts;
+    private string _language = "English";
+
+    protected override async Task OnInitializedAsync()
+    {
+        var profile = await ProfileCache.GetAsync();
+        _language = (profile?.Language ?? AppLanguage.English).ToString();
+    }
+
+    private async Task<AgentContext> BuildContextAsync()
+    {
+        var profile = await ProfileCache.GetAsync();
+        return new AgentContext(
+            profile?.Name ?? "Mama",
+            profile?.CurrentWeek ?? 30,
+            profile?.Language ?? AppLanguage.English,
+            profile?.WorkingWomanMode ?? true);
+    }
+
+    private void Start()
+    {
+        Agents.BirthPlan.Reset();
+        _started = true;
+        _agentResponse = null;
+    }
+
+    private async Task SubmitAnswerAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_currentAnswer)) return;
+        _processing = true;
+        var answer = _currentAnswer;
+        _currentAnswer = string.Empty;
+        _agentResponse = null;
+        StateHasChanged();
+
+        _cts?.Cancel();
+        _cts = new CancellationTokenSource();
+
+        try
+        {
+            var context = await BuildContextAsync();
+            var sb = new System.Text.StringBuilder();
+            var lastRender = DateTime.UtcNow;
+            await foreach (var token in Agents.BirthPlan.ProcessAnswerAsync(answer, context, _cts.Token))
+            {
+                sb.Append(token);
+                if (Agents.BirthPlan.IsComplete)
+                {
+                    // Streaming the birth plan document
+                    _generatingPlan = true;
+                    _planDocument = sb.ToString();
+                }
+                else
+                {
+                    _agentResponse = sb.ToString();
+                }
+
+                // Batch renders — one SignalR round-trip per ~100ms instead of per token
+                if ((DateTime.UtcNow - lastRender).TotalMilliseconds >= 100)
+                {
+                    lastRender = DateTime.UtcNow;
+                    StateHasChanged();
+                }
+            }
+        }
+        catch (OperationCanceledException) { }
+
+        _generatingPlan = false;
+        _processing = false;
+        StateHasChanged();
+    }
+
+    private void ResetPlan()
+    {
+        _started = false;
+        _processing = false;
+        _agentResponse = null;
+        _planDocument = string.Empty;
+        _currentAnswer = string.Empty;
+        Agents.BirthPlan.Reset();
+    }
+
+    public void Dispose() => _cts?.Cancel();
+
+    // Small, hand-maintained dictionary rather than a full resx pipeline —
+    // same approach as Recipes.razor / NavMenu.razor. Only the page's own
+    // static UI chrome is translated here; agent responses (_agentResponse,
+    // CurrentQuestion, _planDocument) already come back pre-translated via
+    // AgentContext.Language and are left untouched.
+    private static readonly Dictionary<string, Dictionary<string, string>> Strings = new()
+    {
+        ["English"] = new()
+        {
+            ["Title"] = "Birth Plan Builder",
+            ["Subtitle"] = "There are no right answers here — only your wishes. We'll go through this gently, one step at a time. You can always come back and change anything.",
+            ["HowThisWorks"] = "How this works",
+            ["IntroBefore"] = "Janani will ask you",
+            ["IntroAfter"] = "simple questions about your preferences for labour and birth. There are no wrong answers — just your wishes. At the end, you'll have a gentle, personal birth plan document ready to share with your care team.",
+            ["IntroNote"] = "A birth plan is a guide, not a contract. It helps your care team understand what matters most to you.",
+            ["LetsBegin"] = "Let's begin 🌸",
+            ["Step"] = "Step",
+            ["Of"] = "of",
+            ["AnswerPlaceholder"] = "Take your time — write whatever feels right...",
+            ["Processing"] = "Processing... 💗",
+            ["Next"] = "Next →",
+            ["YourBirthPlan"] = "Your birth plan",
+            ["PlanIntro"] = "Here is your personal birth plan, built from your own words.",
+            ["StartOver"] = "Start over",
+        },
+        ["Hindi"] = new()
+        {
+            ["Title"] = "प्रसव योजना निर्माता",
+            ["Subtitle"] = "यहां कोई सही जवाब नहीं है — केवल आपकी इच्छाएं हैं। हम इसे धीरे-धीरे, एक-एक कदम करके पूरा करेंगे। आप कभी भी वापस आकर कुछ भी बदल सकती हैं।",
+            ["HowThisWorks"] = "यह कैसे काम करता है",
+            ["IntroBefore"] = "जननी आपसे प्रसव और जन्म से जुड़ी आपकी पसंद के बारे में",
+            ["IntroAfter"] = "सरल सवाल पूछेगी। कोई गलत जवाब नहीं है — बस आपकी इच्छाएं। अंत में, आपके पास एक कोमल, व्यक्तिगत प्रसव योजना दस्तावेज़ होगा, जिसे आप अपनी देखभाल टीम के साथ साझा कर सकती हैं।",
+            ["IntroNote"] = "प्रसव योजना एक मार्गदर्शक है, कोई अनुबंध नहीं। यह आपकी देखभाल टीम को यह समझने में मदद करती है कि आपके लिए सबसे महत्वपूर्ण क्या है।",
+            ["LetsBegin"] = "चलिए शुरू करें 🌸",
+            ["Step"] = "चरण",
+            ["Of"] = "में से",
+            ["AnswerPlaceholder"] = "अपना समय लें — जो सही लगे वह लिखें...",
+            ["Processing"] = "प्रोसेस हो रहा है... 💗",
+            ["Next"] = "आगे →",
+            ["YourBirthPlan"] = "आपकी प्रसव योजना",
+            ["PlanIntro"] = "यह रही आपकी व्यक्तिगत प्रसव योजना, आपके ही शब्दों से बनाई गई।",
+            ["StartOver"] = "फिर से शुरू करें",
+        },
+        ["Telugu"] = new()
+        {
+            ["Title"] = "ప్రసవ ప్రణాళిక నిర్మాత",
+            ["Subtitle"] = "ఇక్కడ సరైన సమాధానాలు లేవు — మీ కోరికలు మాత్రమే ఉన్నాయి. మేము దీన్ని నెమ్మదిగా, ఒక్కో అడుగులో పూర్తి చేస్తాము. మీరు ఎప్పుడైనా తిరిగి వచ్చి దేన్నైనా మార్చుకోవచ్చు.",
+            ["HowThisWorks"] = "ఇది ఎలా పని చేస్తుంది",
+            ["IntroBefore"] = "జననీ మీ ప్రసవం మరియు జననానికి సంబంధించిన మీ ప్రాధాన్యతల గురించి",
+            ["IntroAfter"] = "సాధారణ ప్రశ్నలు అడుగుతుంది. తప్పు సమాధానాలు అంటూ ఏమీ లేవు — మీ కోరికలు మాత్రమే. చివరిలో, మీ సంరక్షణ బృందంతో పంచుకోవడానికి సిద్ధంగా ఉన్న సున్నితమైన, వ్యక్తిగత ప్రసవ ప్రణాళిక పత్రం మీ వద్ద ఉంటుంది.",
+            ["IntroNote"] = "ప్రసవ ప్రణాళిక ఒక మార్గదర్శిని, ఒప్పందం కాదు. ఇది మీకు అత్యంత ముఖ్యమైనది ఏమిటో అర్థం చేసుకోవడానికి మీ సంరక్షణ బృందానికి సహాయపడుతుంది.",
+            ["LetsBegin"] = "మొదలుపెడదాం 🌸",
+            ["Step"] = "దశ",
+            ["Of"] = "లో",
+            ["AnswerPlaceholder"] = "మీ సమయం తీసుకోండి — మీకు సరైనదిగా అనిపించేది రాయండి...",
+            ["Processing"] = "ప్రాసెస్ అవుతోంది... 💗",
+            ["Next"] = "తదుపరి →",
+            ["YourBirthPlan"] = "మీ ప్రసవ ప్రణాళిక",
+            ["PlanIntro"] = "ఇదిగో మీ వ్యక్తిగత ప్రసవ ప్రణాళిక, మీ సొంత మాటల నుండి రూపొందించబడింది.",
+            ["StartOver"] = "మళ్ళీ మొదలుపెట్టండి",
+        },
+    };
+
+    private string T(string key) =>
+        (Strings.TryGetValue(_language, out var dict) && dict.TryGetValue(key, out var value))
+            ? value
+            : Strings["English"][key];
+}

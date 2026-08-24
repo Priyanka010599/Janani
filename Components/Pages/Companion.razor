@@ -1,0 +1,221 @@
+@page "/companion"
+@using Janani.Models
+@using Janani.Services
+@inject BloomAgentRegistry Agents
+@inject UserProfileCache ProfileCache
+@implements IDisposable
+@rendermode InteractiveServer
+
+<PageTitle>Janani — Your Companion</PageTitle>
+
+<div class="bloom-container">
+    <div class="companion-header">
+        <h1>💬 @T("Title")</h1>
+        <p class="subtitle">@T("Subtitle")
+            <br /><small>@T("MedicalNote")</small>
+        </p>
+    </div>
+
+    <div class="chat-window" id="chat-window">
+        @if (!_messages.Any())
+        {
+            <div class="chat-welcome">
+                <p>@T("Greeting") @(_profile?.Name ?? "Mama") @T("GreetingIntro")</p>
+                <p>@T("WhatsOnYourMind")</p>
+                <div class="quick-questions">
+                    @foreach (var q in QuickQuestions())
+                    {
+                        <button class="quick-q-btn" @onclick="() => SendQuickQuestion(q)">@q</button>
+                    }
+                </div>
+            </div>
+        }
+
+        @foreach (var msg in _messages)
+        {
+            <div class="chat-msg @(msg.IsUser ? "user-msg" : "bloom-msg")">
+                @if (!msg.IsUser)
+                {
+                    <span class="bloom-avatar @(msg.IsStreaming ? "thinking" : "")">🌸</span>
+                }
+                <div class="msg-bubble">
+                    @msg.Content
+                    @if (msg.IsStreaming)
+                    {
+                        <span class="typing-dot">▋</span>
+                    }
+                </div>
+            </div>
+        }
+    </div>
+
+    <div class="chat-input-row">
+        <textarea @bind="_input" @bind:event="oninput"
+                  @onkeydown="HandleKeyDown"
+                  placeholder="@T("InputPlaceholder")"
+                  rows="2"
+                  disabled="@_responding"></textarea>
+        <button class="bloom-btn primary send-btn" @onclick="SendAsync"
+                disabled="@(string.IsNullOrWhiteSpace(_input) || _responding)">
+            @if (_responding) { <span>💗</span> } else { <span>@T("Send")</span> }
+        </button>
+    </div>
+</div>
+
+@code {
+    private UserProfile? _profile;
+    private string _input = string.Empty;
+    private bool _responding;
+    private CancellationTokenSource? _cts;
+    private string _language = "English";
+
+    private readonly List<ChatMessage> _messages = [];
+
+    private string[] QuickQuestions() => _language switch
+    {
+        "Hindi" =>
+        [
+            "इस हफ्ते मेरे बच्चे के साथ क्या हो रहा है?",
+            "मॉर्निंग सिकनेस को कैसे कम करूं?",
+            "क्या गर्भावस्था के दौरान व्यायाम करना सुरक्षित है?",
+            "अधिक ऊर्जा के लिए मुझे क्या खाना चाहिए?",
+            "मुझे कैसे पता चलेगा कि कुछ गलत है?"
+        ],
+        "Telugu" =>
+        [
+            "ఈ వారం నా బిడ్డకు ఏమి జరుగుతోంది?",
+            "మార్నింగ్ సిక్‌నెస్‌ను ఎలా తగ్గించుకోవాలి?",
+            "గర్భధారణ సమయంలో వ్యాయామం చేయడం సురక్షితమేనా?",
+            "ఎక్కువ శక్తి కోసం నేను ఏమి తినాలి?",
+            "ఏదైనా తప్పు జరుగుతోందని నాకు ఎలా తెలుస్తుంది?"
+        ],
+        _ =>
+        [
+            "What's happening with my baby this week?",
+            "How can I ease morning sickness?",
+            "Is it safe to exercise during pregnancy?",
+            "What should I eat for more energy?",
+            "How do I know if something is wrong?"
+        ]
+    };
+
+    protected override async Task OnInitializedAsync()
+    {
+        _profile = await ProfileCache.GetAsync();
+        _language = (_profile?.Language ?? AppLanguage.English).ToString();
+    }
+
+    private async Task SendAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_input) || _responding) return;
+
+        var question = _input.Trim();
+        _input = string.Empty;
+        _responding = true;
+
+        _cts?.Cancel();
+        _cts = new CancellationTokenSource();
+
+        _messages.Add(new ChatMessage { Content = question, IsUser = true });
+        var bloomMsg = new ChatMessage { Content = string.Empty, IsUser = false, IsStreaming = true };
+        _messages.Add(bloomMsg);
+        StateHasChanged();
+
+        try
+        {
+            var ctx = new AgentContext(
+                _profile?.Name ?? "Mama",
+                _profile?.CurrentWeek ?? 20,
+                _profile?.Language ?? AppLanguage.English,
+                _profile?.WorkingWomanMode ?? true);
+
+            var sb = new System.Text.StringBuilder();
+            var lastRender = DateTime.UtcNow;
+            await foreach (var token in Agents.Companion.AskAsync(question, ctx, _cts.Token))
+            {
+                sb.Append(token);
+                bloomMsg.Content = sb.ToString();
+
+                // Batch renders — one SignalR round-trip per ~100ms instead of per token
+                if ((DateTime.UtcNow - lastRender).TotalMilliseconds >= 100)
+                {
+                    lastRender = DateTime.UtcNow;
+                    StateHasChanged();
+                }
+            }
+        }
+        catch (OperationCanceledException) { }
+
+        bloomMsg.IsStreaming = false;
+        _responding = false;
+        StateHasChanged();
+    }
+
+    private async Task SendQuickQuestion(string q)
+    {
+        _input = q;
+        await SendAsync();
+    }
+
+    private async Task HandleKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter" && !e.ShiftKey)
+            await SendAsync();
+    }
+
+    private class ChatMessage
+    {
+        public string Content { get; set; } = string.Empty;
+        public bool IsUser { get; set; }
+        public bool IsStreaming { get; set; }
+    }
+
+    public void Dispose() => _cts?.Cancel();
+
+    // Small, hand-maintained dictionary rather than a full resx pipeline —
+    // same approach as Recipes.razor / NavMenu.razor. Only the page's own
+    // static UI chrome and quick-question chip text are translated here;
+    // the actual chat messages/responses already come back pre-translated
+    // via AgentContext.Language and are left untouched.
+    private static readonly Dictionary<string, Dictionary<string, string>> Strings = new()
+    {
+        ["English"] = new()
+        {
+            ["Title"] = "Your Companion",
+            ["Subtitle"] = "Ask me anything about your pregnancy. I'm here to listen and help.",
+            ["MedicalNote"] = "For medical questions, I'll always remind you to check with your provider. 🩺",
+            ["Greeting"] = "Hi",
+            ["GreetingIntro"] = "🌸 I'm Janani, your maternal & pregnancy companion.",
+            ["WhatsOnYourMind"] = "I'm here for questions, worries, or just to talk. What's on your mind today?",
+            ["InputPlaceholder"] = "Ask anything — no question is too small...",
+            ["Send"] = "Send",
+        },
+        ["Hindi"] = new()
+        {
+            ["Title"] = "आपकी साथी",
+            ["Subtitle"] = "मुझसे अपनी गर्भावस्था के बारे में कुछ भी पूछें। मैं यहां सुनने और मदद करने के लिए हूं।",
+            ["MedicalNote"] = "चिकित्सीय सवालों के लिए, मैं हमेशा आपको अपने डॉक्टर से जांच कराने की याद दिलाऊंगी। 🩺",
+            ["Greeting"] = "नमस्ते",
+            ["GreetingIntro"] = "🌸 मैं जननी हूं, आपकी मातृत्व और गर्भावस्था साथी।",
+            ["WhatsOnYourMind"] = "मैं यहां सवालों, चिंताओं के लिए हूं, या बस बात करने के लिए। आज आपके मन में क्या है?",
+            ["InputPlaceholder"] = "कुछ भी पूछें — कोई भी सवाल छोटा नहीं है...",
+            ["Send"] = "भेजें",
+        },
+        ["Telugu"] = new()
+        {
+            ["Title"] = "మీ సహచరి",
+            ["Subtitle"] = "మీ గర్భధారణ గురించి నన్ను ఏదైనా అడగండి. నేను వినడానికి మరియు సహాయం చేయడానికి ఇక్కడ ఉన్నాను.",
+            ["MedicalNote"] = "వైద్య సంబంధిత ప్రశ్నల కోసం, మీ వైద్యుడిని సంప్రదించమని నేను ఎల్లప్పుడూ మీకు గుర్తు చేస్తాను. 🩺",
+            ["Greeting"] = "నమస్తే",
+            ["GreetingIntro"] = "🌸 నేను జననిని, మీ మాతృత్వ మరియు గర్భధారణ సహచరిని.",
+            ["WhatsOnYourMind"] = "నేను ప్రశ్నలు, ఆందోళనల కోసం లేదా కేవలం మాట్లాడటానికి ఇక్కడ ఉన్నాను. ఈరోజు మీ మనసులో ఏముంది?",
+            ["InputPlaceholder"] = "ఏదైనా అడగండి — ఏ ప్రశ్న అయినా చిన్నది కాదు...",
+            ["Send"] = "పంపండి",
+        },
+    };
+
+    private string T(string key) =>
+        (Strings.TryGetValue(_language, out var dict) && dict.TryGetValue(key, out var value))
+            ? value
+            : Strings["English"][key];
+}

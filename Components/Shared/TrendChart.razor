@@ -1,0 +1,58 @@
+@* Components/Shared/TrendChart.razor
+   Small inline-SVG line chart — deliberately no charting library or JS:
+   this app has no client-side chart dependency anywhere else, and a
+   handful of points (vitals/growth history) doesn't need one. Values are
+   plotted purely on their own min/max range, not a fixed clinical scale,
+   so the line always fills the chart regardless of the metric. *@
+
+@if (Values.Count < 2)
+{
+    <p class="sos-hint">Log a couple more readings to see a trend here.</p>
+}
+else
+{
+    <div class="trend-chart">
+        <svg viewBox="0 0 300 90" preserveAspectRatio="none" class="trend-svg">
+            <polyline points="@PolylinePoints" fill="none" stroke="@Color" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" />
+            @for (var i = 0; i < Values.Count; i++)
+            {
+                var (x, y) = PointAt(i);
+                <circle cx="@x" cy="@y" r="3" fill="@Color" />
+            }
+        </svg>
+        <div class="trend-meta">
+            <span>@Min.ToString("0.#")@Unit</span>
+            <span class="trend-latest">latest: @Values[^1].ToString("0.#")@Unit</span>
+            <span>@Max.ToString("0.#")@Unit</span>
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public IReadOnlyList<decimal> Values { get; set; } = [];
+    [Parameter] public string Color { get; set; } = "var(--water-deep)";
+    [Parameter] public string Unit { get; set; } = "";
+
+    private decimal Min => Values.Count > 0 ? Values.Min() : 0;
+    private decimal Max => Values.Count > 0 ? Values.Max() : 0;
+
+    private (double X, double Y) PointAt(int index)
+    {
+        const double width = 300, height = 90, padding = 8;
+        var range = Max - Min;
+        var x = Values.Count == 1 ? width / 2 : padding + (width - 2 * padding) * index / (Values.Count - 1);
+        // A flat trend (range == 0) would divide by zero — draw it as a
+        // level line straight through the middle instead.
+        var y = range == 0
+            ? height / 2
+            : height - padding - (double)((Values[index] - Min) / range) * (height - 2 * padding);
+        return (x, y);
+    }
+
+    private string PolylinePoints =>
+        string.Join(" ", Enumerable.Range(0, Values.Count).Select(i =>
+        {
+            var (x, y) = PointAt(i);
+            return $"{x.ToString(System.Globalization.CultureInfo.InvariantCulture)},{y.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
+        }));
+}

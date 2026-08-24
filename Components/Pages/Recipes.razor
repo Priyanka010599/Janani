@@ -1,0 +1,224 @@
+@page "/recipes"
+@using Janani.Data
+@using Janani.Models
+@using Janani.Services
+@using Microsoft.EntityFrameworkCore
+@inject RecipeService RecipeSvc
+@inject AppDbContext Db
+@inject CurrentUserService CurrentUser
+@rendermode InteractiveServer
+
+<PageTitle>Janani — Recipes</PageTitle>
+
+<div class="bloom-container">
+    <div class="section-header">
+        <h1>🍲 @T("Recipes")</h1>
+        <p class="subtitle">@T("AskLikeCompanion")</p>
+    </div>
+
+    <div class="recipe-ask-card">
+        <div class="recipe-quick-row">
+            @foreach (var q in QuickQuestions())
+            {
+                <button class="quick-q-btn" @onclick="() => AskAsync(q)">@q</button>
+            }
+        </div>
+        <div class="recipe-ask-row">
+            <textarea @bind="_question" placeholder="@T("AskPlaceholder")" rows="2"></textarea>
+            <button class="bloom-btn primary" @onclick="() => AskAsync(_question)" disabled="@(_asking || string.IsNullOrWhiteSpace(_question))">
+                @(_asking ? T("Asking") : T("Ask"))
+            </button>
+        </div>
+
+        @if (_answer != null)
+        {
+            <div class="recipe-answer">
+                <p>@_answer</p>
+                <p class="data-source-note">@T("PickedFromCatalog")</p>
+            </div>
+        }
+        else if (_askError != null)
+        {
+            <p class="medicine-explanation medicine-explanation-error">@_askError</p>
+        }
+    </div>
+
+    <h3 class="recipe-browse-heading">@T("BrowseAll")</h3>
+
+    <div class="recipe-filter-row">
+        <button class="recipe-filter-chip @(_activeCategory == null ? "active" : "")" @onclick="() => FilterAsync(null)">@T("All")</button>
+        @foreach (var (key, _) in RecipeService.Categories)
+        {
+            <button class="recipe-filter-chip @(_activeCategory == key ? "active" : "")" @onclick="() => FilterAsync(key)">@T(key)</button>
+        }
+    </div>
+
+    @if (_loading)
+    {
+        <p class="subtitle">@T("Loading")</p>
+    }
+    else if (_recipes.Count == 0)
+    {
+        <div class="empty-state">
+            <p>@T("NoneFound")</p>
+        </div>
+    }
+    else
+    {
+        <div class="recipe-list">
+            @foreach (var recipe in _recipes)
+            {
+                <div class="recipe-card">
+                    <div class="recipe-card-header">
+                        <strong>@recipe.Title</strong>
+                        <span class="recipe-stage">@recipe.Stage</span>
+                    </div>
+                    <p class="recipe-ingredients"><strong>@T("Ingredients"):</strong> @recipe.Ingredients</p>
+                    <p class="recipe-instructions">@recipe.Instructions</p>
+                    @if (!string.IsNullOrWhiteSpace(recipe.Source))
+                    {
+                        <p class="data-source-note">@recipe.Source</p>
+                    }
+                </div>
+            }
+        </div>
+    }
+
+    <p class="data-source-note recipe-disclaimer">@T("Disclaimer")</p>
+</div>
+
+@code {
+    private string _question = string.Empty;
+    private bool _asking;
+    private string? _answer;
+    private string? _askError;
+
+    private List<Recipe> _recipes = [];
+    private string? _activeCategory;
+    private bool _loading = true;
+    private string _language = "English";
+
+    protected override async Task OnInitializedAsync()
+    {
+        var userId = await CurrentUser.GetUserIdAsync();
+        var profile = await Db.UserProfiles.AsNoTracking().FirstOrDefaultAsync(p => p.UserId == userId);
+        _language = (profile?.Language ?? AppLanguage.English).ToString();
+
+        await LoadAsync();
+    }
+
+    private async Task AskAsync(string question)
+    {
+        if (string.IsNullOrWhiteSpace(question)) return;
+        _question = question;
+        _asking = true;
+        _answer = null;
+        _askError = null;
+        StateHasChanged();
+
+        try
+        {
+            _answer = await RecipeSvc.AskAsync(question, _language);
+        }
+        catch (Exception)
+        {
+            _askError = T("AskError");
+        }
+
+        _asking = false;
+    }
+
+    private async Task FilterAsync(string? category)
+    {
+        _activeCategory = category;
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        StateHasChanged();
+        _recipes = await RecipeSvc.GetRecipesAsync(_activeCategory, _language);
+        _loading = false;
+    }
+
+    private string[] QuickQuestions() => _language switch
+    {
+        "Hindi"  => ["6 महीने के बच्चे के लिए पहला आहार?", "प्रसव के बाद रिकवरी के लिए कुछ?", "दूध बढ़ाने में क्या मदद करता है?"],
+        "Telugu" => ["6 నెలల బిడ్డకు మొదటి ఆహారం?", "ప్రసవం తర్వాత రికవరీ కోసం ఏమైనా?", "పాల ఉత్పత్తికి ఏది సహాయపడుతుంది?"],
+        _        => ["First food for a 6 month old?", "Something for postpartum recovery?", "What helps with milk supply?"]
+    };
+
+    // Small, hand-maintained dictionary rather than a full resx pipeline —
+    // covers the two Indian languages actually translated in the recipe
+    // dataset itself (see newmom_recipes_i18n load); every other profile
+    // language falls back to English, same as RecipeService's data query.
+    private static readonly Dictionary<string, Dictionary<string, string>> Strings = new()
+    {
+        ["English"] = new()
+        {
+            ["Recipes"] = "Recipes",
+            ["AskLikeCompanion"] = "Ask for a recipe, like you would the Companion — answers are picked from a real curated dataset, never invented.",
+            ["AskPlaceholder"] = "e.g. A first food for my 6 month old, or something for postpartum recovery",
+            ["Asking"] = "Asking...",
+            ["Ask"] = "Ask",
+            ["PickedFromCatalog"] = "Picked from Janani's curated recipe dataset, not invented by the model.",
+            ["BrowseAll"] = "Or browse all recipes",
+            ["All"] = "All",
+            ["first-foods"] = "First Foods",
+            ["finger-foods"] = "Finger Foods",
+            ["postpartum-recovery"] = "Postpartum Recovery",
+            ["lactation-support"] = "Lactation Support",
+            ["Loading"] = "Loading recipes...",
+            ["NoneFound"] = "No recipes found 🌷",
+            ["Ingredients"] = "Ingredients",
+            ["Disclaimer"] = "General nutrition guidance, not medical advice — always confirm any new food with your pediatrician, especially around allergies.",
+            ["AskError"] = "Couldn't reach the recipe agent right now — try again in a moment.",
+        },
+        ["Hindi"] = new()
+        {
+            ["Recipes"] = "रेसिपी",
+            ["AskLikeCompanion"] = "कंपैनियन से पूछने की तरह ही, रेसिपी के लिए पूछें — जवाब एक असली, चुनी हुई सूची से लिए जाते हैं, कभी बनाए नहीं जाते।",
+            ["AskPlaceholder"] = "जैसे: मेरे 6 महीने के बच्चे के लिए पहला आहार, या प्रसव के बाद रिकवरी के लिए कुछ",
+            ["Asking"] = "पूछ रहे हैं...",
+            ["Ask"] = "पूछें",
+            ["PickedFromCatalog"] = "जनानी की चुनी हुई रेसिपी सूची से लिया गया, मॉडल द्वारा नहीं बनाया गया।",
+            ["BrowseAll"] = "या सभी रेसिपी देखें",
+            ["All"] = "सभी",
+            ["first-foods"] = "पहला आहार",
+            ["finger-foods"] = "फिंगर फूड",
+            ["postpartum-recovery"] = "प्रसवोत्तर रिकवरी",
+            ["lactation-support"] = "स्तनपान सहायता",
+            ["Loading"] = "रेसिपी लोड हो रही हैं...",
+            ["NoneFound"] = "कोई रेसिपी नहीं मिली 🌷",
+            ["Ingredients"] = "सामग्री",
+            ["Disclaimer"] = "सामान्य पोषण मार्गदर्शन, चिकित्सीय सलाह नहीं — कोई भी नया आहार शुरू करने से पहले हमेशा अपने बाल रोग विशेषज्ञ से पुष्टि करें, विशेष रूप से एलर्जी को लेकर।",
+            ["AskError"] = "अभी रेसिपी एजेंट तक नहीं पहुंच सके — कृपया थोड़ी देर बाद फिर कोशिश करें।",
+        },
+        ["Telugu"] = new()
+        {
+            ["Recipes"] = "వంటకాలు",
+            ["AskLikeCompanion"] = "కంపానియన్‌ని అడిగినట్లే, వంటకం కోసం అడగండి — సమాధానాలు నిజమైన, ఎంపిక చేసిన డేటాసెట్ నుండి తీసుకోబడతాయి, ఎప్పుడూ కల్పించబడవు.",
+            ["AskPlaceholder"] = "ఉదా: నా 6 నెలల బిడ్డకు మొదటి ఆహారం, లేదా ప్రసవం తర్వాత రికవరీ కోసం ఏదైనా",
+            ["Asking"] = "అడుగుతోంది...",
+            ["Ask"] = "అడగండి",
+            ["PickedFromCatalog"] = "జననీ యొక్క ఎంపిక చేసిన వంటకాల డేటాసెట్ నుండి తీసుకోబడింది, మోడల్ కల్పించినది కాదు.",
+            ["BrowseAll"] = "లేదా అన్ని వంటకాలు చూడండి",
+            ["All"] = "అన్నీ",
+            ["first-foods"] = "మొదటి ఆహారం",
+            ["finger-foods"] = "ఫింగర్ ఫుడ్స్",
+            ["postpartum-recovery"] = "ప్రసవానంతర రికవరీ",
+            ["lactation-support"] = "పాలిచ్చే సహాయం",
+            ["Loading"] = "వంటకాలు లోడ్ అవుతున్నాయి...",
+            ["NoneFound"] = "వంటకాలు కనుగొనబడలేదు 🌷",
+            ["Ingredients"] = "పదార్థాలు",
+            ["Disclaimer"] = "సాధారణ పోషకాహార మార్గదర్శకత్వం, వైద్య సలహా కాదు — ఏదైనా కొత్త ఆహారం గురించి ఎల్లప్పుడూ మీ శిశువైద్యుడిని సంప్రదించండి, ముఖ్యంగా అలర్జీల విషయంలో.",
+            ["AskError"] = "ప్రస్తుతం రెసిపీ ఏజెంట్‌ని చేరుకోలేకపోయాము — దయచేసి కొద్దిసేపటి తర్వాత మళ్లీ ప్రయత్నించండి.",
+        },
+    };
+
+    private string T(string key) =>
+        (Strings.TryGetValue(_language, out var dict) && dict.TryGetValue(key, out var value))
+            ? value
+            : Strings["English"][key];
+}

@@ -1,0 +1,218 @@
+@page "/meals"
+@using Janani.Services
+@inject BloomAgentRegistry Agents
+@inject UserProfileCache ProfileCache
+@implements IDisposable
+@rendermode InteractiveServer
+
+<PageTitle>Janani — Meal Nurturer</PageTitle>
+
+<div class="bloom-container">
+    <div class="section-header">
+        <h1>🍽️ @T("Title")</h1>
+        <p class="subtitle">@T("Subtitle")</p>
+    </div>
+
+    @if (_suggestion == null && !_loading)
+    {
+        <div class="meal-prompt-card">
+            <p>@T("HowAreYouFeeling")</p>
+            <div class="feeling-grid">
+                @{ var feelingIndex = 0; }
+                @foreach (var feeling in _feelings)
+                {
+                    var fIdx = feelingIndex++;
+                    <button class="feeling-btn @(_selectedFeeling == feeling.Key ? "selected" : "")"
+                            style="animation-delay: @(fIdx * 0.04)s"
+                            @onclick="() => _selectedFeeling = feeling.Key">
+                        <span>@feeling.Value</span>
+                        <span class="feeling-label">@T(feeling.Key)</span>
+                    </button>
+                }
+            </div>
+
+            <button class="bloom-btn primary" @onclick="SuggestAsync"
+                    disabled="@string.IsNullOrEmpty(_selectedFeeling)">
+                @T("SuggestMeals")
+            </button>
+        </div>
+    }
+
+    <LoadingSkeleton Visible="@_loading" Lines="4" Message="@T("LoadingMessage")" />
+
+    @if (_error != null)
+    {
+        <div class="meal-gentle-note error-note">
+            <p>💗 @_error</p>
+            <button class="bloom-btn secondary small-btn" @onclick="SuggestAsync">@T("TryAgain")</button>
+        </div>
+    }
+
+    @if (_suggestion != null)
+    {
+        <div class="meal-results">
+            <p class="meal-opening">@_suggestion.Opening</p>
+
+            @{ var mealIndex = 0; }
+            @foreach (var meal in _suggestion.Meals)
+            {
+                var mIdx = mealIndex++;
+                <div class="meal-card" style="animation-delay: @(mIdx * 0.08)s">
+                    <h3>@meal.Name</h3>
+                    <p class="meal-desc">@meal.Description</p>
+                    <p class="meal-why"><span class="why-label">@T("WhyItHelps") </span>@meal.WhyItHelps</p>
+                </div>
+            }
+
+            <div class="meal-gentle-note">
+                <p>💗 @_suggestion.GentleNote</p>
+            </div>
+
+            <button class="bloom-btn secondary" @onclick="Reset">
+                @T("TryDifferentFeelings")
+            </button>
+        </div>
+    }
+</div>
+
+@code {
+    private MealSuggestion? _suggestion;
+    private bool _loading;
+    private string? _error;
+    private string _selectedFeeling = string.Empty;
+    private CancellationTokenSource? _cts;
+    private string _language = "English";
+
+    private readonly Dictionary<string, string> _feelings = new()
+    {
+        ["Nauseous"]        = "🤢",
+        ["Hungry"]          = "😋",
+        ["No appetite"]     = "😕",
+        ["Craving sweet"]   = "🍬",
+        ["Craving savoury"] = "🧀",
+        ["Tired & low"]     = "😴",
+        ["Energetic"]       = "✨",
+    };
+
+    protected override async Task OnInitializedAsync()
+    {
+        var profile = await ProfileCache.GetAsync();
+        _language = (profile?.Language ?? AppLanguage.English).ToString();
+    }
+
+    private async Task<AgentContext> BuildContextAsync()
+    {
+        var profile = await ProfileCache.GetAsync();
+        return new AgentContext(
+            profile?.Name ?? "Mama",
+            profile?.CurrentWeek ?? 20,
+            profile?.Language ?? AppLanguage.English,
+            profile?.WorkingWomanMode ?? true);
+    }
+
+    private async Task SuggestAsync()
+    {
+        _loading = true;
+        _suggestion = null;
+        _error = null;
+        StateHasChanged();
+
+        _cts?.Cancel();
+        _cts = new CancellationTokenSource();
+
+        try
+        {
+            var emoji = _feelings.GetValueOrDefault(_selectedFeeling, "");
+            var context = await BuildContextAsync();
+            _suggestion = await Agents.Meals.SuggestMealsAsync(
+                $"{emoji} {_selectedFeeling}", context, _cts.Token);
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception)
+        {
+            _error = T("GenericError");
+        }
+
+        _loading = false;
+    }
+
+    private void Reset()
+    {
+        _suggestion = null;
+        _selectedFeeling = string.Empty;
+    }
+
+    public void Dispose() => _cts?.Cancel();
+
+    // Small, hand-maintained dictionary rather than a full resx pipeline —
+    // same approach as Recipes.razor / NavMenu.razor. Only the page's own
+    // static UI chrome and feeling-chip labels are translated here; the
+    // _feelings dictionary keys stay in English (used for selection logic
+    // and as the agent input), and the suggested meals themselves already
+    // come back pre-translated via AgentContext.Language, left untouched.
+    private static readonly Dictionary<string, Dictionary<string, string>> Strings = new()
+    {
+        ["English"] = new()
+        {
+            ["Title"] = "Meal Nurturer",
+            ["Subtitle"] = "Gentle, pregnancy-safe meal ideas based on how you're feeling right now.",
+            ["HowAreYouFeeling"] = "How are you feeling about food right now?",
+            ["Nauseous"] = "Nauseous",
+            ["Hungry"] = "Hungry",
+            ["No appetite"] = "No appetite",
+            ["Craving sweet"] = "Craving sweet",
+            ["Craving savoury"] = "Craving savoury",
+            ["Tired & low"] = "Tired & low",
+            ["Energetic"] = "Energetic",
+            ["SuggestMeals"] = "Suggest meals 🌸",
+            ["LoadingMessage"] = "Finding something gentle for you — this can take a minute or two",
+            ["TryAgain"] = "Try again",
+            ["WhyItHelps"] = "Why it helps:",
+            ["TryDifferentFeelings"] = "Try different feelings",
+            ["GenericError"] = "That took a wrong turn — could you try again?",
+        },
+        ["Hindi"] = new()
+        {
+            ["Title"] = "भोजन पोषण",
+            ["Subtitle"] = "कोमल, गर्भावस्था के लिए सुरक्षित भोजन के विचार, जो अभी आप कैसा महसूस कर रही हैं उस पर आधारित हैं।",
+            ["HowAreYouFeeling"] = "अभी खाने को लेकर आपको कैसा महसूस हो रहा है?",
+            ["Nauseous"] = "मितली",
+            ["Hungry"] = "भूख लगी है",
+            ["No appetite"] = "भूख नहीं है",
+            ["Craving sweet"] = "मीठा खाने का मन",
+            ["Craving savoury"] = "नमकीन खाने का मन",
+            ["Tired & low"] = "थकान और कमज़ोरी",
+            ["Energetic"] = "ऊर्जावान",
+            ["SuggestMeals"] = "भोजन सुझाएं 🌸",
+            ["LoadingMessage"] = "आपके लिए कुछ कोमल ढूंढ रहे हैं — इसमें एक-दो मिनट लग सकते हैं",
+            ["TryAgain"] = "फिर कोशिश करें",
+            ["WhyItHelps"] = "यह क्यों मदद करता है:",
+            ["TryDifferentFeelings"] = "अलग भावनाएं आज़माएं",
+            ["GenericError"] = "कुछ गड़बड़ हो गई — क्या आप फिर से कोशिश कर सकती हैं?",
+        },
+        ["Telugu"] = new()
+        {
+            ["Title"] = "భోజన పోషణ",
+            ["Subtitle"] = "మీరు ఇప్పుడు ఎలా భావిస్తున్నారో దాని ఆధారంగా, సున్నితమైన, గర్భధారణకు సురక్షితమైన భోజన ఆలోచనలు.",
+            ["HowAreYouFeeling"] = "ఇప్పుడు ఆహారం గురించి మీకు ఎలా అనిపిస్తోంది?",
+            ["Nauseous"] = "వికారం",
+            ["Hungry"] = "ఆకలిగా ఉంది",
+            ["No appetite"] = "ఆకలి లేదు",
+            ["Craving sweet"] = "తీపి తినాలని అనిపిస్తోంది",
+            ["Craving savoury"] = "ఉప్పగా తినాలని అనిపిస్తోంది",
+            ["Tired & low"] = "అలసట మరియు నీరసం",
+            ["Energetic"] = "ఉత్సాహంగా",
+            ["SuggestMeals"] = "భోజనం సూచించండి 🌸",
+            ["LoadingMessage"] = "మీ కోసం సున్నితమైనది ఏదైనా వెతుకుతున్నాము — దీనికి ఒకటి రెండు నిమిషాలు పట్టవచ్చు",
+            ["TryAgain"] = "మళ్ళీ ప్రయత్నించండి",
+            ["WhyItHelps"] = "ఇది ఎలా సహాయపడుతుంది:",
+            ["TryDifferentFeelings"] = "వేరే భావాలను ప్రయత్నించండి",
+            ["GenericError"] = "ఏదో తప్పు జరిగింది — దయచేసి మళ్ళీ ప్రయత్నించగలరా?",
+        },
+    };
+
+    private string T(string key) =>
+        (Strings.TryGetValue(_language, out var dict) && dict.TryGetValue(key, out var value))
+            ? value
+            : Strings["English"][key];
+}

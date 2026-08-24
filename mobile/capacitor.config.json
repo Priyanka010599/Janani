@@ -1,0 +1,13 @@
+{
+  "appId": "com.janani.app",
+  "appName": "Janani",
+  "webDir": "www",
+  "server": {
+    "url": "https://janani-app-52541450553.us-central1.run.app",
+    "androidScheme": "https",
+    "allowNavigation": [
+      "accounts.google.com",
+      "*.googleusercontent.com"
+    ]
+  }
+}

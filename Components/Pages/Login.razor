@@ -1,0 +1,91 @@
+@page "/login"
+@attribute [AllowAnonymous]
+@using System.ComponentModel.DataAnnotations
+@using System.Security.Claims
+@using Microsoft.AspNetCore.Authentication
+@using Microsoft.AspNetCore.Authentication.Cookies
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Identity
+@using Janani.Data
+@using Janani.Models
+@using Microsoft.EntityFrameworkCore
+@inject AppDbContext Db
+@inject NavigationManager Nav
+
+<PageTitle>Janani — Log In</PageTitle>
+
+<div class="bloom-container auth-container">
+    <div class="auth-card">
+        <div class="section-header">
+            <h1>🌷 Welcome back</h1>
+            <p class="subtitle">Log in to your Janani account.</p>
+        </div>
+
+        @if (_error != null)
+        {
+            <div class="meal-gentle-note error-note"><p>💗 @_error</p></div>
+        }
+
+        <EditForm Model="Input" FormName="login" OnValidSubmit="HandleLoginAsync" method="post">
+            <DataAnnotationsValidator />
+            <div class="form-field">
+                <label>Username</label>
+                <InputText @bind-Value="Input.Username" autocomplete="username" />
+            </div>
+            <div class="form-field">
+                <label>Password</label>
+                <InputText @bind-Value="Input.Password" type="password" autocomplete="current-password" />
+            </div>
+            <button class="bloom-btn primary" type="submit">Log in</button>
+        </EditForm>
+
+        <p class="auth-switch">New here? <a href="/register">Create an account</a></p>
+    </div>
+</div>
+
+@code {
+    [SupplyParameterFromForm]
+    private LoginModel Input { get; set; } = new();
+
+    [CascadingParameter]
+    private HttpContext HttpContext { get; set; } = default!;
+
+    [SupplyParameterFromQuery]
+    private string? ReturnUrl { get; set; }
+
+    private string? _error;
+
+    private async Task HandleLoginAsync()
+    {
+        var username = Input.Username.Trim().ToLowerInvariant();
+        var user = await Db.Users.AsNoTracking().FirstOrDefaultAsync(u => u.Username == username);
+
+        var hasher = new PasswordHasher<User>();
+        if (user == null ||
+            hasher.VerifyHashedPassword(user, user.PasswordHash, Input.Password) == PasswordVerificationResult.Failed)
+        {
+            // Deliberately generic — don't reveal whether the username exists.
+            _error = "Invalid username or password.";
+            return;
+        }
+
+        var claims = new List<Claim>
+        {
+            new(ClaimTypes.NameIdentifier, user.Id.ToString()),
+            new(ClaimTypes.Name, user.Username)
+        };
+        var identity = new ClaimsIdentity(claims, CookieAuthenticationDefaults.AuthenticationScheme);
+        await HttpContext.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, new ClaimsPrincipal(identity));
+
+        Nav.NavigateTo(string.IsNullOrEmpty(ReturnUrl) ? "/" : ReturnUrl, forceLoad: true);
+    }
+
+    private class LoginModel
+    {
+        [Required]
+        public string Username { get; set; } = string.Empty;
+
+        [Required]
+        public string Password { get; set; } = string.Empty;
+    }
+}

@@ -1,0 +1,336 @@
+@page "/appointments"
+@using Janani.Models
+@using Janani.Data
+@using Microsoft.EntityFrameworkCore
+@inject AppDbContext Db
+@inject CurrentUserService CurrentUser
+@inject ICalendarSyncService CalendarSync
+@rendermode InteractiveServer
+
+<PageTitle>Janani — Appointment Hub</PageTitle>
+
+<div class="bloom-container">
+    <div class="section-header">
+        <h1>🩺 @T("Title")</h1>
+        <p class="subtitle">@T("Subtitle")</p>
+    </div>
+
+    @if (_adding)
+    {
+        <div class="appointment-form">
+            <h3>@T("AddAppointmentHeading")</h3>
+
+            <div class="form-field">
+                <label>@T("KindLabel")</label>
+                <input @bind="_newTitle" placeholder="@T("KindPlaceholder")" />
+            </div>
+
+            <div class="form-row">
+                <div class="form-field">
+                    <label>@T("DateTimeLabel")</label>
+                    <input type="datetime-local" @bind="_newDate" />
+                </div>
+                <div class="form-field">
+                    <label>@T("DoctorLabel")</label>
+                    <input @bind="_newDoctor" placeholder="@T("DoctorPlaceholder")" />
+                </div>
+            </div>
+
+            <div class="form-field">
+                <label>@T("LocationLabel")</label>
+                <input @bind="_newLocation" placeholder="@T("LocationPlaceholder")" />
+            </div>
+
+            <div class="form-field">
+                <label>@T("QuestionsLabel")</label>
+                <textarea @bind="_newQuestions"
+                          placeholder="@T("QuestionsPlaceholder")"
+                          rows="4"></textarea>
+            </div>
+
+            <div class="form-actions">
+                <button class="bloom-btn primary" @onclick="SaveAppointmentAsync"
+                        disabled="@string.IsNullOrWhiteSpace(_newTitle)">
+                    @T("SaveAppointmentButton")
+                </button>
+                <button class="bloom-btn secondary" @onclick="() => _adding = false">@T("Cancel")</button>
+            </div>
+        </div>
+    }
+    else
+    {
+        <button class="bloom-btn primary new-entry-btn" @onclick="() => _adding = true">
+            + @T("AddAppointmentButton")
+        </button>
+    }
+
+    @if (_noteTarget != null)
+    {
+        <div class="appointment-form">
+            <h3>@T("NotesHeading")</h3>
+            <p class="visit-title">@_noteTarget.Title — @_noteTarget.AppointmentDate.ToString("dd MMM yyyy")</p>
+            <textarea @bind="_noteText"
+                      placeholder="@T("NotesPlaceholder")"
+                      rows="5"></textarea>
+            <div class="form-actions">
+                <button class="bloom-btn primary" @onclick="SaveNoteAsync">@T("SaveNotesButton")</button>
+                <button class="bloom-btn secondary" @onclick="() => _noteTarget = null">@T("Cancel")</button>
+            </div>
+        </div>
+    }
+
+    <div class="appointments-list">
+        @if (!_upcoming.Any() && !_past.Any())
+        {
+            <div class="empty-state">
+                <p>@T("EmptyStateTitle")</p>
+                <p>@T("EmptyStateHint")</p>
+            </div>
+        }
+
+        @if (_upcoming.Any())
+        {
+            <h3 class="list-section-title">@T("UpcomingHeading")</h3>
+            @foreach (var appt in _upcoming)
+            {
+                <div class="appointment-card upcoming" style="animation-delay: @(_upcoming.IndexOf(appt) * 0.05)s">
+                    <div class="appt-header">
+                        <div class="appt-info">
+                            <strong>@appt.Title</strong>
+                            <span class="appt-meta">
+                                📅 @appt.AppointmentDate.ToString("dddd, dd MMM yyyy · HH:mm")
+                                @if (!string.IsNullOrEmpty(appt.DoctorName))
+                                { <span> · @appt.DoctorName</span> }
+                                @if (!string.IsNullOrEmpty(appt.Location))
+                                { <span> · 📍 @appt.Location</span> }
+                            </span>
+                        </div>
+                        <button class="bloom-btn secondary small-btn" @onclick="() => MarkComplete(appt)">
+                            @T("MarkVisitedButton")
+                        </button>
+                    </div>
+                    @if (!string.IsNullOrEmpty(appt.QuestionsToAsk))
+                    {
+                        <div class="appt-questions">
+                            <strong>@T("QuestionsToAskLabel")</strong>
+                            <p>@appt.QuestionsToAsk</p>
+                        </div>
+                    }
+                </div>
+            }
+        }
+
+        @if (_past.Any())
+        {
+            <h3 class="list-section-title">@T("PastVisitsHeading")</h3>
+            @foreach (var appt in _past)
+            {
+                <div class="appointment-card past" style="animation-delay: @(_past.IndexOf(appt) * 0.05)s">
+                    <div class="appt-header">
+                        <div class="appt-info">
+                            <strong>@appt.Title</strong>
+                            <span class="appt-meta">
+                                @appt.AppointmentDate.ToString("dd MMM yyyy")
+                                @if (!string.IsNullOrEmpty(appt.DoctorName))
+                                { <span> · @appt.DoctorName</span> }
+                            </span>
+                        </div>
+                        <button class="bloom-btn secondary small-btn"
+                                @onclick="() => StartAddingNote(appt)">
+                            @(string.IsNullOrEmpty(appt.NotesAfterVisit) ? T("AddNotesButton") : T("EditNotesButton"))
+                        </button>
+                    </div>
+                    @if (!string.IsNullOrEmpty(appt.NotesAfterVisit))
+                    {
+                        <div class="appt-notes">
+                            <strong>@T("MyNotesLabel")</strong>
+                            <p>@appt.NotesAfterVisit</p>
+                        </div>
+                    }
+                </div>
+            }
+        }
+    </div>
+</div>
+
+@code {
+    private List<AppointmentEntry> _upcoming = [];
+    private List<AppointmentEntry> _past = [];
+    private bool _adding;
+    private string _newTitle = string.Empty;
+    private DateTime _newDate = DateTime.Now.AddDays(7);
+    private string _newDoctor = string.Empty;
+    private string _newLocation = string.Empty;
+    private string _newQuestions = string.Empty;
+    private AppointmentEntry? _noteTarget;
+    private string _noteText = string.Empty;
+    private string _language = "English";
+
+    protected override async Task OnInitializedAsync()
+    {
+        var userId = await CurrentUser.GetUserIdAsync();
+        var profile = await Db.UserProfiles.AsNoTracking().FirstOrDefaultAsync(p => p.UserId == userId);
+        _language = (profile?.Language ?? AppLanguage.English).ToString();
+
+        await LoadAppointmentsAsync();
+    }
+
+    private async Task LoadAppointmentsAsync()
+    {
+        var userId = await CurrentUser.GetUserIdAsync();
+        var all = await Db.Appointments.Where(a => a.UserId == userId).OrderBy(a => a.AppointmentDate).ToListAsync();
+        _upcoming = all.Where(a => !a.Completed).ToList();
+        _past = all.Where(a => a.Completed).OrderByDescending(a => a.AppointmentDate).ToList();
+    }
+
+    private async Task SaveAppointmentAsync()
+    {
+        var entry = new AppointmentEntry
+        {
+            UserId = await CurrentUser.GetUserIdAsync(),
+            Title = _newTitle,
+            // The <input type="datetime-local"> binds a Kind=Unspecified
+            // DateTime — Npgsql rejects anything but Utc for a timestamptz
+            // column. No real timezone conversion needed here (the app
+            // doesn't track per-user timezones), just tag the picked
+            // wall-clock value as UTC so it round-trips unchanged.
+            AppointmentDate = DateTime.SpecifyKind(_newDate, DateTimeKind.Utc),
+            DoctorName = _newDoctor,
+            Location = _newLocation,
+            QuestionsToAsk = _newQuestions
+        };
+        Db.Appointments.Add(entry);
+        await Db.SaveChangesAsync();
+        await CalendarSync.SyncAppointmentAsync(entry.UserId, entry);
+        await Db.SaveChangesAsync(); // persists GoogleEventId if sync set it
+        _newTitle = _newDoctor = _newLocation = _newQuestions = string.Empty;
+        _newDate = DateTime.Now.AddDays(7);
+        _adding = false;
+        await LoadAppointmentsAsync();
+    }
+
+    private async Task MarkComplete(AppointmentEntry appt)
+    {
+        appt.Completed = true;
+        await Db.SaveChangesAsync();
+        await CalendarSync.SyncAppointmentAsync(appt.UserId, appt);
+        await Db.SaveChangesAsync();
+        await LoadAppointmentsAsync();
+    }
+
+    private void StartAddingNote(AppointmentEntry appt)
+    {
+        _noteTarget = appt;
+        _noteText = appt.NotesAfterVisit ?? string.Empty;
+    }
+
+    private async Task SaveNoteAsync()
+    {
+        if (_noteTarget == null) return;
+        _noteTarget.NotesAfterVisit = _noteText;
+        await Db.SaveChangesAsync();
+        await CalendarSync.SyncAppointmentAsync(_noteTarget.UserId, _noteTarget);
+        await Db.SaveChangesAsync();
+        _noteTarget = null;
+        await LoadAppointmentsAsync();
+    }
+
+    private static readonly Dictionary<string, Dictionary<string, string>> Strings = new()
+    {
+        ["English"] = new()
+        {
+            ["Title"] = "Appointment Hub",
+            ["Subtitle"] = "Your appointments, questions, and memories from each visit — all in one peaceful place.",
+            ["AddAppointmentHeading"] = "Add an appointment",
+            ["KindLabel"] = "What kind of appointment?",
+            ["KindPlaceholder"] = "e.g. 20-week anatomy scan, midwife check-up...",
+            ["DateTimeLabel"] = "Date & time",
+            ["DoctorLabel"] = "Doctor / midwife name (optional)",
+            ["DoctorPlaceholder"] = "Dr. ...",
+            ["LocationLabel"] = "Location (optional)",
+            ["LocationPlaceholder"] = "Hospital, clinic name...",
+            ["QuestionsLabel"] = "Questions I want to ask 💬",
+            ["QuestionsPlaceholder"] = "Write down anything you want to remember to ask — no question is too small.",
+            ["SaveAppointmentButton"] = "Save appointment 🌸",
+            ["Cancel"] = "Cancel",
+            ["AddAppointmentButton"] = "Add appointment",
+            ["NotesHeading"] = "Notes from my visit 📝",
+            ["NotesPlaceholder"] = "What did the doctor say? How are you feeling after? What do you want to remember?",
+            ["SaveNotesButton"] = "Save notes ✨",
+            ["EmptyStateTitle"] = "No appointments yet 🌷",
+            ["EmptyStateHint"] = "Add your first one whenever you're ready.",
+            ["UpcomingHeading"] = "Upcoming",
+            ["MarkVisitedButton"] = "Mark visited ✓",
+            ["QuestionsToAskLabel"] = "Questions to ask:",
+            ["PastVisitsHeading"] = "Past visits",
+            ["AddNotesButton"] = "Add notes",
+            ["EditNotesButton"] = "Edit notes",
+            ["MyNotesLabel"] = "My notes:",
+        },
+        ["Hindi"] = new()
+        {
+            ["Title"] = "अपॉइंटमेंट हब",
+            ["Subtitle"] = "आपके अपॉइंटमेंट, सवाल, और हर विज़िट की यादें — सब एक शांत जगह पर।",
+            ["AddAppointmentHeading"] = "अपॉइंटमेंट जोड़ें",
+            ["KindLabel"] = "किस तरह की अपॉइंटमेंट?",
+            ["KindPlaceholder"] = "जैसे: 20-सप्ताह एनाटॉमी स्कैन, मिडवाइफ चेक-अप...",
+            ["DateTimeLabel"] = "तारीख और समय",
+            ["DoctorLabel"] = "डॉक्टर / मिडवाइफ का नाम (वैकल्पिक)",
+            ["DoctorPlaceholder"] = "डॉ. ...",
+            ["LocationLabel"] = "स्थान (वैकल्पिक)",
+            ["LocationPlaceholder"] = "अस्पताल, क्लिनिक का नाम...",
+            ["QuestionsLabel"] = "मैं जो सवाल पूछना चाहती हूं 💬",
+            ["QuestionsPlaceholder"] = "जो कुछ भी पूछना याद रखना चाहती हैं, वह लिख लें — कोई भी सवाल छोटा नहीं है।",
+            ["SaveAppointmentButton"] = "अपॉइंटमेंट सहेजें 🌸",
+            ["Cancel"] = "रद्द करें",
+            ["AddAppointmentButton"] = "अपॉइंटमेंट जोड़ें",
+            ["NotesHeading"] = "मेरी विज़िट के नोट्स 📝",
+            ["NotesPlaceholder"] = "डॉक्टर ने क्या कहा? इसके बाद आप कैसा महसूस कर रही हैं? आप क्या याद रखना चाहती हैं?",
+            ["SaveNotesButton"] = "नोट्स सहेजें ✨",
+            ["EmptyStateTitle"] = "अभी तक कोई अपॉइंटमेंट नहीं 🌷",
+            ["EmptyStateHint"] = "जब भी आप तैयार हों, अपनी पहली अपॉइंटमेंट जोड़ें।",
+            ["UpcomingHeading"] = "आगामी",
+            ["MarkVisitedButton"] = "विज़िट हो गई ✓",
+            ["QuestionsToAskLabel"] = "पूछने के लिए सवाल:",
+            ["PastVisitsHeading"] = "पिछली विज़िट",
+            ["AddNotesButton"] = "नोट्स जोड़ें",
+            ["EditNotesButton"] = "नोट्स संपादित करें",
+            ["MyNotesLabel"] = "मेरे नोट्स:",
+        },
+        ["Telugu"] = new()
+        {
+            ["Title"] = "అపాయింట్‌మెంట్ హబ్",
+            ["Subtitle"] = "మీ అపాయింట్‌మెంట్‌లు, ప్రశ్నలు, మరియు ప్రతి సందర్శన జ్ఞాపకాలు — అన్నీ ఒకే ప్రశాంతమైన స్థలంలో.",
+            ["AddAppointmentHeading"] = "అపాయింట్‌మెంట్ జోడించండి",
+            ["KindLabel"] = "ఎలాంటి అపాయింట్‌మెంట్?",
+            ["KindPlaceholder"] = "ఉదా: 20-వారాల ఎనాటమీ స్కాన్, మిడ్‌వైఫ్ చెక్-అప్...",
+            ["DateTimeLabel"] = "తేదీ & సమయం",
+            ["DoctorLabel"] = "డాక్టర్ / మిడ్‌వైఫ్ పేరు (ఐచ్ఛికం)",
+            ["DoctorPlaceholder"] = "డా. ...",
+            ["LocationLabel"] = "స్థానం (ఐచ్ఛికం)",
+            ["LocationPlaceholder"] = "ఆసుపత్రి, క్లినిక్ పేరు...",
+            ["QuestionsLabel"] = "నేను అడగాలనుకుంటున్న ప్రశ్నలు 💬",
+            ["QuestionsPlaceholder"] = "మీరు అడగాలని గుర్తుంచుకోవాలనుకునేది ఏదైనా రాయండి — ఏ ప్రశ్న చిన్నది కాదు.",
+            ["SaveAppointmentButton"] = "అపాయింట్‌మెంట్ సేవ్ చేయండి 🌸",
+            ["Cancel"] = "రద్దు చేయండి",
+            ["AddAppointmentButton"] = "అపాయింట్‌మెంట్‌ను జోడించండి",
+            ["NotesHeading"] = "నా సందర్శన నోట్స్ 📝",
+            ["NotesPlaceholder"] = "డాక్టర్ ఏమి చెప్పారు? దాని తర్వాత మీరు ఎలా అనిపిస్తోంది? మీరు ఏమి గుర్తుంచుకోవాలనుకుంటున్నారు?",
+            ["SaveNotesButton"] = "నోట్స్ సేవ్ చేయండి ✨",
+            ["EmptyStateTitle"] = "ఇంకా అపాయింట్‌మెంట్‌లు లేవు 🌷",
+            ["EmptyStateHint"] = "మీరు సిద్ధంగా ఉన్నప్పుడు మీ మొదటిదాన్ని జోడించండి.",
+            ["UpcomingHeading"] = "రాబోయేవి",
+            ["MarkVisitedButton"] = "సందర్శించినట్లు గుర్తించండి ✓",
+            ["QuestionsToAskLabel"] = "అడగాల్సిన ప్రశ్నలు:",
+            ["PastVisitsHeading"] = "గత సందర్శనలు",
+            ["AddNotesButton"] = "నోట్స్ జోడించండి",
+            ["EditNotesButton"] = "నోట్స్ సవరించండి",
+            ["MyNotesLabel"] = "నా నోట్స్:",
+        },
+    };
+
+    private string T(string key) =>
+        (Strings.TryGetValue(_language, out var dict) && dict.TryGetValue(key, out var value))
+            ? value
+            : Strings["English"][key];
+}

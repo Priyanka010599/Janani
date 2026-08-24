@@ -1,0 +1,83 @@
+@* Components/Shared/VoiceInput.razor
+   Reusable voice-to-text component using the browser's Web Speech API.
+   Works in Chrome and Edge. Gracefully hides itself in unsupported browsers.
+   Usage: <VoiceInput OnTranscript="text => myField = text" Language="@lang" />
+*@
+
+@using Janani.Services
+@inject IJSRuntime JS
+
+@if (_supported)
+{
+    <button class="voice-btn @(_listening ? "listening" : "")"
+            @onclick="ToggleListeningAsync"
+            title="@(_listening ? "Stop recording" : "Speak your answer")">
+        @if (_listening)
+        {
+            <span class="voice-pulse">🔴</span>
+            <span>Listening...</span>
+        }
+        else
+        {
+            <span>🎙️</span>
+            <span>Speak</span>
+        }
+    </button>
+}
+
+@code {
+    [Parameter] public EventCallback<string> OnTranscript { get; set; }
+    [Parameter] public AppLanguage Language { get; set; } = AppLanguage.English;
+
+    private bool _supported = true;
+    private bool _listening;
+    private DotNetObjectReference<VoiceInput>? _ref;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;
+        _ref = DotNetObjectReference.Create(this);
+        _supported = await JS.InvokeAsync<bool>("bloomVoice.isSupported");
+        StateHasChanged();
+    }
+
+    private async Task ToggleListeningAsync()
+    {
+        if (_listening)
+        {
+            await JS.InvokeVoidAsync("bloomVoice.stop");
+            _listening = false;
+        }
+        else
+        {
+            _listening = true;
+            var lang = Language switch
+            {
+                AppLanguage.Hindi     => "hi-IN",
+                AppLanguage.Telugu    => "te-IN",
+                AppLanguage.Japanese  => "ja-JP",
+                AppLanguage.Norwegian => "nb-NO",
+                AppLanguage.Arabic    => "ar-SA",
+                _                     => "en-US"
+            };
+            await JS.InvokeVoidAsync("bloomVoice.start", _ref, lang);
+        }
+    }
+
+    [JSInvokable]
+    public async Task ReceiveTranscript(string text)
+    {
+        _listening = false;
+        await OnTranscript.InvokeAsync(text);
+        StateHasChanged();
+    }
+
+    [JSInvokable]
+    public void OnListeningEnd()
+    {
+        _listening = false;
+        StateHasChanged();
+    }
+
+    public void Dispose() => _ref?.Dispose();
+}

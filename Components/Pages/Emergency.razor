@@ -1,0 +1,449 @@
+@page "/emergency"
+@using Janani.Models
+@using Janani.Data
+@using Janani.Services
+@using Microsoft.EntityFrameworkCore
+@inject AppDbContext Db
+@inject UserProfileCache ProfileCache
+@inject CurrentUserService CurrentUser
+@inject CareAccessService CareAccess
+@rendermode InteractiveServer
+
+<PageTitle>Janani — Distress & Support</PageTitle>
+
+<div class="bloom-container">
+    <div class="section-header">
+        <h1>🆘 @T("Title")</h1>
+        <p class="subtitle">@T("Subtitle")</p>
+    </div>
+
+    <div class="sos-safety-note">
+        <p>⚠️ @T("SafetyNote")</p>
+    </div>
+
+    @if (_subjects.Count > 1)
+    {
+        <div class="sos-card">
+            <h3>@T("WhoIsThisAbout")</h3>
+            <div class="feeling-grid">
+                @foreach (var subject in _subjects)
+                {
+                    <button class="feeling-btn @(_selectedSubjectKey == subject.Key ? "selected" : "")" @onclick="() => SelectSubjectAsync(subject.Key)">
+                        <span>@subject.Icon</span>
+                        <span class="feeling-label">@subject.Label</span>
+                    </button>
+                }
+            </div>
+        </div>
+    }
+
+    <div class="sos-card">
+        <h3>💗 @T("SendMessageTitle")</h3>
+        <p class="sos-hint">@T("SendMessageHint")</p>
+        <textarea class="sos-message" @bind="_sosMessage" @bind:event="oninput" rows="3"></textarea>
+    </div>
+
+    @if (_contacts.Any())
+    {
+        <div class="contact-list">
+            @{ var contactIndex = 0; }
+            @foreach (var c in _contacts)
+            {
+                var cIdx = contactIndex++;
+                <div class="contact-card @(c.IsDoctor ? "is-doctor" : "")" style="animation-delay: @(cIdx * 0.05)s">
+                    <div class="contact-info">
+                        <strong>@c.Name</strong>
+                        <span class="contact-relation">@(c.IsDoctor ? "🩺 " : "💗 ")@c.Relation</span>
+                    </div>
+                    <div class="contact-actions">
+                        @if (!string.IsNullOrWhiteSpace(c.Phone))
+                        {
+                            <a class="bloom-btn primary small-btn" href="@($"tel:{c.Phone}")">📞 @T("CallBtn")</a>
+                            <a class="bloom-btn secondary small-btn" href="@BuildSmsLink(c.Phone)">💬 @T("TextBtn")</a>
+                        }
+                        @if (!string.IsNullOrWhiteSpace(c.Email))
+                        {
+                            <a class="bloom-btn secondary small-btn" href="@BuildMailtoLink(c)">✉️ @T("EmailBtn")</a>
+                        }
+                        <button class="icon-btn" title="@string.Format(T("RemoveTemplate"), c.Name)" aria-label="@string.Format(T("RemoveTemplate"), c.Name)" @onclick="() => DeleteContactAsync(c)">✕</button>
+                    </div>
+                </div>
+            }
+        </div>
+    }
+    else if (!_adding)
+    {
+        <div class="empty-state">
+            <p>@T("EmptyTitle")</p>
+            <p>@T("EmptyHint")</p>
+        </div>
+    }
+
+    @if (_adding)
+    {
+        <div class="appointment-form">
+            <h3>@T("AddSomeoneHeading")</h3>
+            <div class="form-field">
+                <label>@T("NameLabel")</label>
+                <input @bind="_newName" placeholder="@T("NamePlaceholder")" />
+            </div>
+            <div class="form-row">
+                <div class="form-field">
+                    <label>@T("RelationLabel")</label>
+                    <input @bind="_newRelation" placeholder="@T("RelationPlaceholder")" />
+                </div>
+                <div class="form-field">
+                    <label class="checkbox-field">
+                        <input type="checkbox" @bind="_newIsDoctor" /> @T("IsDoctorLabel")
+                    </label>
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-field">
+                    <label>@T("PhoneLabel")</label>
+                    <input @bind="_newPhone" placeholder="+1 555 123 4567" />
+                </div>
+                <div class="form-field">
+                    <label>@T("EmailLabel")</label>
+                    <input @bind="_newEmail" placeholder="name@example.com" />
+                </div>
+            </div>
+            <div class="form-actions">
+                <button class="bloom-btn primary" @onclick="SaveContactAsync" disabled="@string.IsNullOrWhiteSpace(_newName)">
+                    @T("SaveContactBtn")
+                </button>
+                <button class="bloom-btn secondary" @onclick="() => _adding = false">@T("Cancel")</button>
+            </div>
+        </div>
+    }
+    else
+    {
+        <button class="bloom-btn secondary new-entry-btn" @onclick="() => _adding = true">
+            @T("AddContactBtn")
+        </button>
+    }
+</div>
+
+@code {
+    private record SosSubject(string Key, string Icon, string Label);
+
+    [SupplyParameterFromQuery(Name = "about")]
+    private string? AboutParam { get; set; }
+
+    private List<EmergencyContact> _contacts = [];
+    private List<ElderProfile> _elders = [];
+    private List<InfantProfile> _infants = [];
+    private Dictionary<int, Alert> _openElderAlerts = [];
+    private Dictionary<int, InfantAlert> _openInfantAlerts = [];
+    private List<SosSubject> _subjects = [];
+    private string _selectedSubjectKey = "self";
+    private UserProfile? _profile;
+    private bool _adding;
+    private string _newName = string.Empty;
+    private string _newRelation = string.Empty;
+    private string _newPhone = string.Empty;
+    private string _newEmail = string.Empty;
+    private bool _newIsDoctor;
+    private string _sosMessage = string.Empty;
+    private string _language = "English";
+
+    protected override async Task OnInitializedAsync()
+    {
+        _profile = await ProfileCache.GetAsync();
+        _language = (_profile?.Language ?? AppLanguage.English).ToString();
+        var userId = await CurrentUser.GetUserIdAsync();
+
+        var accessibleElderIds = await CareAccess.GetAccessibleElderIdsAsync(userId);
+        var accessibleInfantIds = await CareAccess.GetAccessibleInfantIdsAsync(userId);
+        _elders = await Db.ElderProfiles.AsNoTracking()
+            .Where(e => accessibleElderIds.Contains(e.Id))
+            .OrderBy(e => e.Name)
+            .ToListAsync();
+        _infants = await Db.InfantProfiles.AsNoTracking()
+            .Where(i => accessibleInfantIds.Contains(i.Id))
+            .OrderBy(i => i.Name)
+            .ToListAsync();
+
+        if (_elders.Count > 0)
+        {
+            var elderIds = _elders.Select(e => e.Id).ToList();
+            var openAlerts = await Db.Alerts.AsNoTracking()
+                .Where(a => elderIds.Contains(a.ElderProfileId) && !a.Acknowledged)
+                .OrderByDescending(a => a.TriggeredAt)
+                .ToListAsync();
+            _openElderAlerts = openAlerts
+                .GroupBy(a => a.ElderProfileId)
+                .ToDictionary(g => g.Key, g => g.First());
+        }
+
+        if (_infants.Count > 0)
+        {
+            var infantIds = _infants.Select(i => i.Id).ToList();
+            var openAlerts = await Db.InfantAlerts.AsNoTracking()
+                .Where(a => infantIds.Contains(a.InfantProfileId) && !a.Acknowledged)
+                .OrderByDescending(a => a.TriggeredAt)
+                .ToListAsync();
+            _openInfantAlerts = openAlerts
+                .GroupBy(a => a.InfantProfileId)
+                .ToDictionary(g => g.Key, g => g.First());
+        }
+
+        _subjects = BuildSubjects();
+
+        var initialKey = ResolveInitialSubjectKey();
+        await SelectSubjectAsync(initialKey);
+
+        await LoadContactsAsync();
+    }
+
+    private List<SosSubject> BuildSubjects()
+    {
+        var subjects = new List<SosSubject>();
+        if (_profile?.TracksPregnancy != false)
+        {
+            subjects.Add(new SosSubject("self", "💗", T("Myself")));
+        }
+        subjects.AddRange(_elders.Select(e => new SosSubject($"elder-{e.Id}",
+            _openElderAlerts.ContainsKey(e.Id) ? "🚨" : "🌼", e.Name)));
+        subjects.AddRange(_infants.Select(i => new SosSubject($"infant-{i.Id}",
+            _openInfantAlerts.ContainsKey(i.Id) ? "🚨" : "👶", i.Name)));
+
+        if (subjects.Count == 0)
+        {
+            subjects.Add(new SosSubject("self", "💗", T("Myself")));
+        }
+
+        return subjects;
+    }
+
+    private string ResolveInitialSubjectKey()
+    {
+        if (!string.IsNullOrWhiteSpace(AboutParam) && _subjects.Any(s => s.Key == AboutParam))
+            return AboutParam;
+
+        return _subjects[0].Key;
+    }
+
+    private Task SelectSubjectAsync(string key)
+    {
+        _selectedSubjectKey = key;
+        _sosMessage = BuildMessageForSubject(key);
+        return Task.CompletedTask;
+    }
+
+    private string BuildMessageForSubject(string key)
+    {
+        var myName = _profile?.Name ?? "me";
+
+        if (key.StartsWith("elder-") && int.TryParse(key["elder-".Length..], out var elderId))
+        {
+            var elder = _elders.FirstOrDefault(e => e.Id == elderId);
+            if (elder != null)
+            {
+                var concern = _openElderAlerts.TryGetValue(elderId, out var alert)
+                    ? alert.Message
+                    : T("ConcernElderDefault");
+                return string.Format(T("ElderMessageTemplate"), myName, elder.Name, elder.Relation, concern);
+            }
+        }
+
+        if (key.StartsWith("infant-") && int.TryParse(key["infant-".Length..], out var infantId))
+        {
+            var infant = _infants.FirstOrDefault(i => i.Id == infantId);
+            if (infant != null)
+            {
+                var concern = _openInfantAlerts.TryGetValue(infantId, out var alert)
+                    ? alert.Message
+                    : T("ConcernInfantDefault");
+                return string.Format(T("InfantMessageTemplate"), myName, infant.Name, concern);
+            }
+        }
+
+        if (_profile?.TracksPregnancy == true)
+        {
+            var weekText = _profile != null ? $"{_profile.CurrentWeek} {T("Weeks")}" : T("SomeWeeks");
+            return string.Format(T("PregnancyMessageTemplate"), myName, weekText);
+        }
+
+        return string.Format(T("GenericMessageTemplate"), myName);
+    }
+
+    private async Task LoadContactsAsync()
+    {
+        var userId = await CurrentUser.GetUserIdAsync();
+        _contacts = await Db.EmergencyContacts
+            .AsNoTracking()
+            .Where(c => c.UserId == userId)
+            .OrderByDescending(c => c.IsDoctor)
+            .ThenBy(c => c.Name)
+            .ToListAsync();
+    }
+
+    private async Task SaveContactAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_newName)) return;
+
+        Db.EmergencyContacts.Add(new EmergencyContact
+        {
+            UserId = await CurrentUser.GetUserIdAsync(),
+            Name = _newName.Trim(),
+            Relation = string.IsNullOrWhiteSpace(_newRelation) ? (_newIsDoctor ? T("DoctorDefault") : T("TrustedContactDefault")) : _newRelation.Trim(),
+            Phone = string.IsNullOrWhiteSpace(_newPhone) ? null : _newPhone.Trim(),
+            Email = string.IsNullOrWhiteSpace(_newEmail) ? null : _newEmail.Trim(),
+            IsDoctor = _newIsDoctor
+        });
+        await Db.SaveChangesAsync();
+
+        _newName = string.Empty;
+        _newRelation = string.Empty;
+        _newPhone = string.Empty;
+        _newEmail = string.Empty;
+        _newIsDoctor = false;
+        _adding = false;
+        await LoadContactsAsync();
+    }
+
+    private async Task DeleteContactAsync(EmergencyContact contact)
+    {
+        Db.EmergencyContacts.Remove(contact);
+        await Db.SaveChangesAsync();
+        await LoadContactsAsync();
+    }
+
+    private string BuildSmsLink(string? phone)
+    {
+        if (string.IsNullOrWhiteSpace(phone)) return "#";
+        return $"sms:{Uri.EscapeDataString(phone)}?body={Uri.EscapeDataString(_sosMessage)}";
+    }
+
+    private string BuildMailtoLink(EmergencyContact contact)
+    {
+        if (string.IsNullOrWhiteSpace(contact.Email)) return "#";
+        var subject = Uri.EscapeDataString(T("EmailSubject"));
+        var body = Uri.EscapeDataString(_sosMessage);
+        return $"mailto:{contact.Email}?subject={subject}&body={body}";
+    }
+
+    private static readonly Dictionary<string, Dictionary<string, string>> Strings = new()
+    {
+        ["English"] = new()
+        {
+            ["Title"] = "Distress & Support",
+            ["Subtitle"] = "If something feels wrong, you don't have to figure it out alone. Reach out — right now, in one tap.",
+            ["SafetyNote"] = "If this is a medical emergency or you're in immediate danger, call your local emergency number first — don't wait on this page.",
+            ["WhoIsThisAbout"] = "Who is this about?",
+            ["SendMessageTitle"] = "Send a quick message",
+            ["SendMessageHint"] = "Edit it if you'd like, then tap Call, Text, or Email on a contact below to reach them with this message ready to go.",
+            ["CallBtn"] = "Call",
+            ["TextBtn"] = "Text",
+            ["EmailBtn"] = "Email",
+            ["RemoveTemplate"] = "Remove {0}",
+            ["EmptyTitle"] = "No contacts saved yet 🌷",
+            ["EmptyHint"] = "Add your doctor or someone you trust below so you can reach them quickly.",
+            ["AddSomeoneHeading"] = "Add someone to reach",
+            ["NameLabel"] = "Name",
+            ["NamePlaceholder"] = "e.g. Dr. Patel, Mom, Alex",
+            ["RelationLabel"] = "Relation",
+            ["RelationPlaceholder"] = "e.g. OB-GYN, Partner, Sister",
+            ["IsDoctorLabel"] = "This is a doctor / care provider",
+            ["PhoneLabel"] = "Phone",
+            ["EmailLabel"] = "Email (optional)",
+            ["SaveContactBtn"] = "Save contact 💗",
+            ["Cancel"] = "Cancel",
+            ["AddContactBtn"] = "+ Add a contact",
+            ["Myself"] = "Myself",
+            ["ConcernElderDefault"] = "I'm concerned about them and need help.",
+            ["ConcernInfantDefault"] = "I need some help or advice right now.",
+            ["ElderMessageTemplate"] = "Hi, it's {0} — this is about {1} ({2}). {3} Please call or reach out as soon as you can. 💗",
+            ["InfantMessageTemplate"] = "Hi, it's {0} — this is about {1}. {2} Please call or reach out as soon as you can. 💗",
+            ["PregnancyMessageTemplate"] = "Hi, it's {0} — I'm {1} pregnant and I need support right now. Please call or reach out as soon as you can. 💗",
+            ["GenericMessageTemplate"] = "Hi, it's {0} — I need support right now. Please call or reach out as soon as you can. 💗",
+            ["Weeks"] = "weeks",
+            ["SomeWeeks"] = "some weeks",
+            ["DoctorDefault"] = "Doctor",
+            ["TrustedContactDefault"] = "Trusted contact",
+            ["EmailSubject"] = "I need to reach you",
+        },
+        ["Hindi"] = new()
+        {
+            ["Title"] = "संकट और सहायता",
+            ["Subtitle"] = "अगर कुछ गलत महसूस हो रहा है, तो आपको इसे अकेले समझने की ज़रूरत नहीं है। संपर्क करें — अभी, एक टैप में।",
+            ["SafetyNote"] = "अगर यह एक चिकित्सीय आपातकाल है या आप तुरंत खतरे में हैं, तो पहले अपने स्थानीय आपातकालीन नंबर पर कॉल करें — इस पेज पर इंतज़ार न करें।",
+            ["WhoIsThisAbout"] = "यह किसके बारे में है?",
+            ["SendMessageTitle"] = "एक त्वरित संदेश भेजें",
+            ["SendMessageHint"] = "यदि आप चाहें तो इसे संपादित करें, फिर नीचे किसी संपर्क पर कॉल, टेक्स्ट या ईमेल टैप करें और यह संदेश तैयार होकर उन तक पहुंच जाएगा।",
+            ["CallBtn"] = "कॉल करें",
+            ["TextBtn"] = "टेक्स्ट करें",
+            ["EmailBtn"] = "ईमेल करें",
+            ["RemoveTemplate"] = "{0} हटाएं",
+            ["EmptyTitle"] = "अभी तक कोई संपर्क सहेजा नहीं गया 🌷",
+            ["EmptyHint"] = "अपने डॉक्टर या किसी भरोसेमंद व्यक्ति को नीचे जोड़ें ताकि आप उन्हें जल्दी से संपर्क कर सकें।",
+            ["AddSomeoneHeading"] = "संपर्क करने के लिए किसी को जोड़ें",
+            ["NameLabel"] = "नाम",
+            ["NamePlaceholder"] = "जैसे: डॉ. पटेल, मम्मी, एलेक्स",
+            ["RelationLabel"] = "संबंध",
+            ["RelationPlaceholder"] = "जैसे: OB-GYN, पार्टनर, बहन",
+            ["IsDoctorLabel"] = "यह एक डॉक्टर / देखभाल प्रदाता है",
+            ["PhoneLabel"] = "फ़ोन",
+            ["EmailLabel"] = "ईमेल (वैकल्पिक)",
+            ["SaveContactBtn"] = "संपर्क सहेजें 💗",
+            ["Cancel"] = "रद्द करें",
+            ["AddContactBtn"] = "+ संपर्क जोड़ें",
+            ["Myself"] = "स्वयं",
+            ["ConcernElderDefault"] = "मुझे उनकी चिंता है और मदद चाहिए।",
+            ["ConcernInfantDefault"] = "मुझे अभी कुछ मदद या सलाह चाहिए।",
+            ["ElderMessageTemplate"] = "नमस्ते, यह {0} है — यह {1} ({2}) के बारे में है। {3} कृपया जितनी जल्दी हो सके कॉल करें या संपर्क करें। 💗",
+            ["InfantMessageTemplate"] = "नमस्ते, यह {0} है — यह {1} के बारे में है। {2} कृपया जितनी जल्दी हो सके कॉल करें या संपर्क करें। 💗",
+            ["PregnancyMessageTemplate"] = "नमस्ते, यह {0} है — मैं {1} गर्भवती हूं और मुझे अभी सहायता चाहिए। कृपया जितनी जल्दी हो सके कॉल करें या संपर्क करें। 💗",
+            ["GenericMessageTemplate"] = "नमस्ते, यह {0} है — मुझे अभी सहायता चाहिए। कृपया जितनी जल्दी हो सके कॉल करें या संपर्क करें। 💗",
+            ["Weeks"] = "सप्ताह",
+            ["SomeWeeks"] = "कुछ सप्ताह",
+            ["DoctorDefault"] = "डॉक्टर",
+            ["TrustedContactDefault"] = "भरोसेमंद संपर्क",
+            ["EmailSubject"] = "मुझे आपसे संपर्क करना है",
+        },
+        ["Telugu"] = new()
+        {
+            ["Title"] = "సంక్షోభం & మద్దతు",
+            ["Subtitle"] = "ఏదైనా తప్పుగా అనిపిస్తే, దాన్ని ఒంటరిగా ఎదుర్కోవాల్సిన అవసరం లేదు. సంప్రదించండి — ఇప్పుడే, ఒకే ట్యాప్‌లో.",
+            ["SafetyNote"] = "ఇది వైద్య అత్యవసర పరిస్థితి అయితే లేదా మీరు తక్షణ ప్రమాదంలో ఉంటే, ముందుగా మీ స్థానిక అత్యవసర నంబర్‌కి కాల్ చేయండి — ఈ పేజీలో వేచి ఉండకండి.",
+            ["WhoIsThisAbout"] = "ఇది ఎవరి గురించి?",
+            ["SendMessageTitle"] = "త్వరిత సందేశం పంపండి",
+            ["SendMessageHint"] = "మీకు నచ్చితే దీన్ని సవరించండి, తర్వాత క్రింద ఉన్న సంప్రదింపులో కాల్, టెక్స్ట్ లేదా ఇమెయిల్‌పై ట్యాప్ చేయండి — ఈ సందేశం సిద్ధంగా వారికి చేరుతుంది.",
+            ["CallBtn"] = "కాల్ చేయండి",
+            ["TextBtn"] = "టెక్స్ట్ చేయండి",
+            ["EmailBtn"] = "ఇమెయిల్ చేయండి",
+            ["RemoveTemplate"] = "{0}ని తొలగించండి",
+            ["EmptyTitle"] = "ఇంకా సంప్రదింపులు సేవ్ చేయలేదు 🌷",
+            ["EmptyHint"] = "మీరు త్వరగా చేరుకోగలిగేలా మీ డాక్టర్ లేదా మీరు నమ్మే వ్యక్తిని క్రింద జోడించండి.",
+            ["AddSomeoneHeading"] = "సంప్రదించడానికి ఎవరినైనా జోడించండి",
+            ["NameLabel"] = "పేరు",
+            ["NamePlaceholder"] = "ఉదా: డా. పటేల్, అమ్మ, అలెక్స్",
+            ["RelationLabel"] = "సంబంధం",
+            ["RelationPlaceholder"] = "ఉదా: OB-GYN, భాగస్వామి, సోదరి",
+            ["IsDoctorLabel"] = "ఇది ఒక డాక్టర్ / సంరక్షణ ప్రదాత",
+            ["PhoneLabel"] = "ఫోన్",
+            ["EmailLabel"] = "ఇమెయిల్ (ఐచ్ఛికం)",
+            ["SaveContactBtn"] = "సంప్రదింపును సేవ్ చేయండి 💗",
+            ["Cancel"] = "రద్దు చేయండి",
+            ["AddContactBtn"] = "+ సంప్రదింపును జోడించండి",
+            ["Myself"] = "నేను",
+            ["ConcernElderDefault"] = "నాకు వారి గురించి ఆందోళనగా ఉంది మరియు సహాయం కావాలి.",
+            ["ConcernInfantDefault"] = "నాకు ఇప్పుడే కొంత సహాయం లేదా సలహా కావాలి.",
+            ["ElderMessageTemplate"] = "నమస్తే, ఇది {0} — ఇది {1} ({2}) గురించి. {3} దయచేసి వీలైనంత త్వరగా కాల్ చేయండి లేదా సంప్రదించండి. 💗",
+            ["InfantMessageTemplate"] = "నమస్తే, ఇది {0} — ఇది {1} గురించి. {2} దయచేసి వీలైనంత త్వరగా కాల్ చేయండి లేదా సంప్రదించండి. 💗",
+            ["PregnancyMessageTemplate"] = "నమస్తే, ఇది {0} — నేను {1} గర్భవతిని మరియు నాకు ఇప్పుడే సహాయం కావాలి. దయచేసి వీలైనంత త్వరగా కాల్ చేయండి లేదా సంప్రదించండి. 💗",
+            ["GenericMessageTemplate"] = "నమస్తే, ఇది {0} — నాకు ఇప్పుడే సహాయం కావాలి. దయచేసి వీలైనంత త్వరగా కాల్ చేయండి లేదా సంప్రదించండి. 💗",
+            ["Weeks"] = "వారాలు",
+            ["SomeWeeks"] = "కొన్ని వారాలు",
+            ["DoctorDefault"] = "డాక్టర్",
+            ["TrustedContactDefault"] = "నమ్మకమైన సంప్రదింపు",
+            ["EmailSubject"] = "నేను మిమ్మల్ని సంప్రదించాలి",
+        },
+    };
+
+    private string T(string key) =>
+        (Strings.TryGetValue(_language, out var dict) && dict.TryGetValue(key, out var value))
+            ? value
+            : Strings["English"][key];
+}

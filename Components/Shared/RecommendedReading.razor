@@ -1,0 +1,38 @@
+@* Components/Shared/RecommendedReading.razor
+   Drops into any page with a Topic — backed by BookRecommendationService's
+   BigQuery-ranked real books, not an LLM guess. *@
+@inject BookRecommendationService BookService
+
+@if (_books.Count > 0)
+{
+    <div class="plan-card">
+        <h3>📚 Recommended reading</h3>
+        <div class="contact-list">
+            @foreach (var book in _books)
+            {
+                <div class="contact-card">
+                    <div class="contact-info">
+                        <strong>@book.Title</strong>
+                        <span class="contact-relation">@book.Authors</span>
+                    </div>
+                    <span class="family-status">⭐ @book.AverageRating.ToString("0.0")</span>
+                </div>
+            }
+        </div>
+        <p class="data-source-note">Ranked by real ratings from a BigQuery dataset — not an AI guess.</p>
+    </div>
+}
+
+@code {
+    [Parameter] public string Topic { get; set; } = "";
+
+    private string? _loadedTopic;
+    private List<BookRecommendation> _books = [];
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (string.IsNullOrEmpty(Topic) || Topic == _loadedTopic) return;
+        _loadedTopic = Topic;
+        _books = await BookService.GetRecommendationsAsync(Topic);
+    }
+}

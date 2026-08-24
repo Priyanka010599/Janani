@@ -1,0 +1,282 @@
+@page "/settings"
+@using Janani.Models
+@using Janani.Data
+@using Janani.Services
+@using Microsoft.EntityFrameworkCore
+@inject AppDbContext Db
+@inject CurrentUserService CurrentUser
+@inject NavigationManager Nav
+@inject IJSRuntime JS
+@rendermode InteractiveServer
+
+<PageTitle>Janani — Settings</PageTitle>
+
+<div class="bloom-container">
+    <div class="section-header">
+        <h1>⚙️ @T("Title")</h1>
+        <p class="subtitle">@T("Subtitle")</p>
+    </div>
+
+    @if (_banner != null)
+    {
+        <div class="sos-safety-note">
+            <p>@_banner</p>
+        </div>
+    }
+
+    <div class="sos-card">
+        <h3>📅 @T("GoogleCalendarHeading")</h3>
+        @if (_account == null)
+        {
+            <p class="sos-hint">@T("ConnectCalendarHint")</p>
+            <a class="bloom-btn primary" href="/calendar/connect/google">@T("ConnectCalendarButton")</a>
+        }
+        else
+        {
+            <p class="sos-hint">@T("ConnectedOn") @_account.ConnectedAt.ToLocalTime().ToString("dd MMM yyyy")</p>
+
+            @if (_account.LastSyncFailed)
+            {
+                <div class="sos-safety-note">
+                    <p>⚠️ @T("SyncFailedWarning")</p>
+                </div>
+            }
+
+            <label class="checkbox-field">
+                <input type="checkbox" @bind="_account.SyncEnabled" @bind:after="SaveSyncEnabledAsync" />
+                @T("SyncAutomatically")
+            </label>
+
+            <div class="form-actions">
+                <a class="bloom-btn secondary small-btn" href="/calendar/disconnect/google">@T("Disconnect")</a>
+            </div>
+        }
+    </div>
+
+    <div class="sos-card">
+        <h3>🔔 @T("NotificationsHeading")</h3>
+        <p class="sos-hint">@T("NotificationsHint")</p>
+        @if (_pushEnabled)
+        {
+            <p class="sos-hint">✅ @T("NotificationsOn")</p>
+        }
+        else
+        {
+            <button class="bloom-btn primary small-btn" @onclick="EnablePushAsync" disabled="@_enablingPush">
+                @if (_enablingPush) { <span>@T("Enabling")</span> } else { <span>@T("EnableNotifications")</span> }
+            </button>
+        }
+        @if (_pushError != null)
+        {
+            <p class="sos-hint">💗 @_pushError</p>
+        }
+    </div>
+
+    <div class="sos-card">
+        <h3>🩺 @T("DoctorAlertHeading")</h3>
+        <p class="sos-hint">@T("DoctorAlertHint")</p>
+        @if (_emailAccount == null)
+        {
+            <a class="bloom-btn primary small-btn" href="/email-alerts/connect/google">@T("ConnectGmailButton")</a>
+        }
+        else
+        {
+            <p class="sos-hint">@T("ConnectedOn") @_emailAccount.ConnectedAt.ToLocalTime().ToString("dd MMM yyyy")</p>
+
+            @if (_emailAccount.LastSendFailed)
+            {
+                <div class="sos-safety-note">
+                    <p>⚠️ @T("EmailSendFailedWarning")</p>
+                </div>
+            }
+
+            <div class="form-actions">
+                <a class="bloom-btn secondary small-btn" href="/email-alerts/disconnect/google">@T("Disconnect")</a>
+            </div>
+        }
+    </div>
+</div>
+
+@code {
+    private ConnectedCalendarAccount? _account;
+    private ConnectedEmailAccount? _emailAccount;
+    private string? _banner;
+    private bool _pushEnabled;
+    private bool _enablingPush;
+    private string? _pushError;
+    private string _language = "English";
+
+    private record PushEnableResult(bool Ok, string? Reason);
+
+    protected override async Task OnInitializedAsync()
+    {
+        var userId = await CurrentUser.GetUserIdAsync();
+        var profile = await Db.UserProfiles.AsNoTracking().FirstOrDefaultAsync(p => p.UserId == userId);
+        _language = (profile?.Language ?? AppLanguage.English).ToString();
+
+        var uri = new Uri(Nav.Uri);
+        var query = !string.IsNullOrEmpty(uri.Query)
+            ? Microsoft.AspNetCore.WebUtilities.QueryHelpers.ParseQuery(uri.Query)
+            : null;
+        var calendarParam = query != null && query.TryGetValue("calendar", out var v) ? v.ToString() : null;
+        var emailAlertsParam = query != null && query.TryGetValue("emailAlerts", out var e) ? e.ToString() : null;
+
+        _banner = calendarParam switch
+        {
+            "connected" => T("BannerCalendarConnected"),
+            "disconnected" => T("BannerCalendarDisconnected"),
+            "error" => T("BannerCalendarError"),
+            _ => emailAlertsParam switch
+            {
+                "connected" => T("BannerGmailConnected"),
+                "disconnected" => T("BannerGmailDisconnected"),
+                "error" => T("BannerGmailError"),
+                _ => null
+            }
+        };
+
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        var userId = await CurrentUser.GetUserIdAsync();
+        _account = await Db.ConnectedCalendarAccounts
+            .FirstOrDefaultAsync(a => a.UserId == userId && a.Provider == "Google");
+        _emailAccount = await Db.ConnectedEmailAccounts
+            .FirstOrDefaultAsync(a => a.UserId == userId && a.Provider == "Google");
+    }
+
+    private async Task SaveSyncEnabledAsync() => await Db.SaveChangesAsync();
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;
+        // Browser permission is the closest signal available for "already
+        // enabled on this device" without round-tripping a device id —
+        // good enough for this toggle's purpose (avoid a redundant prompt).
+        var permission = await JS.InvokeAsync<string>("jananiPush.permission");
+        _pushEnabled = permission == "granted";
+        StateHasChanged();
+    }
+
+    private async Task EnablePushAsync()
+    {
+        _enablingPush = true;
+        _pushError = null;
+        StateHasChanged();
+
+        var result = await JS.InvokeAsync<PushEnableResult>("jananiPush.enable");
+        _pushEnabled = result.Ok;
+        if (!result.Ok)
+        {
+            _pushError = result.Reason switch
+            {
+                "denied" => T("PushDenied"),
+                "unsupported" => T("PushUnsupported"),
+                _ => T("PushError")
+            };
+        }
+
+        _enablingPush = false;
+    }
+
+    private static readonly Dictionary<string, Dictionary<string, string>> Strings = new()
+    {
+        ["English"] = new()
+        {
+            ["Title"] = "Settings",
+            ["Subtitle"] = "Connect your calendar so appointments organize themselves — this is just for you, never shared with anyone else.",
+            ["GoogleCalendarHeading"] = "Google Calendar",
+            ["ConnectCalendarHint"] = "Connect your Google Calendar and every appointment you add in Janani will show up there automatically.",
+            ["ConnectCalendarButton"] = "Connect Google Calendar",
+            ["ConnectedOn"] = "Connected",
+            ["SyncFailedWarning"] = "Last sync to Google Calendar failed — your appointment is still saved in Janani either way. Try reconnecting if this keeps happening.",
+            ["SyncAutomatically"] = "Sync new appointments automatically",
+            ["Disconnect"] = "Disconnect",
+            ["NotificationsHeading"] = "Notifications",
+            ["NotificationsHint"] = "Get notified even when Janani isn't open — for elder vitals or infant growth concerns that need attention.",
+            ["NotificationsOn"] = "Notifications are on for this device.",
+            ["Enabling"] = "Enabling...",
+            ["EnableNotifications"] = "Enable notifications",
+            ["DoctorAlertHeading"] = "Doctor Alert Emails",
+            ["DoctorAlertHint"] = "Connect Gmail so Janani can automatically email a designated doctor the moment a Critical concern is flagged for someone you care for — set the doctor's email on each elder/infant profile.",
+            ["ConnectGmailButton"] = "Connect Gmail",
+            ["EmailSendFailedWarning"] = "The last doctor alert email failed to send. Try reconnecting if this keeps happening.",
+            ["BannerCalendarConnected"] = "Google Calendar connected — new appointments will sync automatically. 🌸",
+            ["BannerCalendarDisconnected"] = "Google Calendar disconnected.",
+            ["BannerCalendarError"] = "Something went wrong connecting Google Calendar — please try again.",
+            ["BannerGmailConnected"] = "Gmail connected — doctor alert emails are on. 🌸",
+            ["BannerGmailDisconnected"] = "Gmail disconnected — doctor alert emails are off.",
+            ["BannerGmailError"] = "Something went wrong connecting Gmail — please try again.",
+            ["PushDenied"] = "Notifications were blocked — you can allow them from your browser's site settings.",
+            ["PushUnsupported"] = "This browser doesn't support push notifications.",
+            ["PushError"] = "Something went wrong enabling notifications — please try again.",
+        },
+        ["Hindi"] = new()
+        {
+            ["Title"] = "सेटिंग्स",
+            ["Subtitle"] = "अपना कैलेंडर कनेक्ट करें ताकि अपॉइंटमेंट खुद व्यवस्थित हो जाएं — यह सिर्फ आपके लिए है, कभी किसी और के साथ साझा नहीं किया जाता।",
+            ["GoogleCalendarHeading"] = "Google Calendar",
+            ["ConnectCalendarHint"] = "अपना Google Calendar कनेक्ट करें और जनानी में जोड़ा गया हर अपॉइंटमेंट वहां अपने आप दिखने लगेगा।",
+            ["ConnectCalendarButton"] = "Google Calendar कनेक्ट करें",
+            ["ConnectedOn"] = "कनेक्टेड",
+            ["SyncFailedWarning"] = "पिछला Google Calendar सिंक विफल हो गया — आपका अपॉइंटमेंट जनानी में फिर भी सेव है। यदि यह बार-बार हो रहा है, तो दोबारा कनेक्ट करने का प्रयास करें।",
+            ["SyncAutomatically"] = "नए अपॉइंटमेंट अपने आप सिंक करें",
+            ["Disconnect"] = "डिस्कनेक्ट करें",
+            ["NotificationsHeading"] = "सूचनाएं",
+            ["NotificationsHint"] = "जनानी बंद होने पर भी सूचना पाएं — बुज़ुर्गों के स्वास्थ्य या शिशु की वृद्धि से जुड़ी चिंताओं के लिए जिन पर ध्यान देने की ज़रूरत है।",
+            ["NotificationsOn"] = "इस डिवाइस के लिए सूचनाएं चालू हैं।",
+            ["Enabling"] = "सक्षम किया जा रहा है...",
+            ["EnableNotifications"] = "सूचनाएं सक्षम करें",
+            ["DoctorAlertHeading"] = "डॉक्टर अलर्ट ईमेल",
+            ["DoctorAlertHint"] = "Gmail कनेक्ट करें ताकि जनानी आपके किसी अपने के लिए गंभीर (Critical) चिंता फ़्लैग होते ही तुरंत नियत डॉक्टर को ईमेल कर सके — डॉक्टर की ईमेल प्रत्येक बुज़ुर्ग/शिशु प्रोफ़ाइल में सेट करें।",
+            ["ConnectGmailButton"] = "Gmail कनेक्ट करें",
+            ["EmailSendFailedWarning"] = "आखिरी डॉक्टर अलर्ट ईमेल भेजने में विफल रहा। यदि यह बार-बार हो रहा है, तो दोबारा कनेक्ट करने का प्रयास करें।",
+            ["BannerCalendarConnected"] = "Google Calendar कनेक्ट हो गया — नए अपॉइंटमेंट अपने आप सिंक होंगे। 🌸",
+            ["BannerCalendarDisconnected"] = "Google Calendar डिस्कनेक्ट हो गया।",
+            ["BannerCalendarError"] = "Google Calendar कनेक्ट करने में कुछ गड़बड़ हो गई — कृपया फिर से प्रयास करें।",
+            ["BannerGmailConnected"] = "Gmail कनेक्ट हो गया — डॉक्टर अलर्ट ईमेल चालू हैं। 🌸",
+            ["BannerGmailDisconnected"] = "Gmail डिस्कनेक्ट हो गया — डॉक्टर अलर्ट ईमेल बंद हैं।",
+            ["BannerGmailError"] = "Gmail कनेक्ट करने में कुछ गड़बड़ हो गई — कृपया फिर से प्रयास करें।",
+            ["PushDenied"] = "सूचनाएं ब्लॉक कर दी गई थीं — आप उन्हें अपने ब्राउज़र की साइट सेटिंग्स से अनुमति दे सकते हैं।",
+            ["PushUnsupported"] = "यह ब्राउज़र पुश सूचनाओं का समर्थन नहीं करता।",
+            ["PushError"] = "सूचनाएं सक्षम करने में कुछ गड़बड़ हो गई — कृपया फिर से प्रयास करें।",
+        },
+        ["Telugu"] = new()
+        {
+            ["Title"] = "సెట్టింగ్‌లు",
+            ["Subtitle"] = "మీ క్యాలెండర్‌ను కనెక్ట్ చేయండి, తద్వారా అపాయింట్‌మెంట్‌లు వాటంతట అవే వ్యవస్థీకృతమవుతాయి — ఇది కేవలం మీ కోసమే, ఎవరితోనూ పంచుకోబడదు.",
+            ["GoogleCalendarHeading"] = "Google Calendar",
+            ["ConnectCalendarHint"] = "మీ Google Calendarను కనెక్ట్ చేయండి, జననిలో మీరు జోడించే ప్రతి అపాయింట్‌మెంట్ అక్కడ స్వయంచాలకంగా కనిపిస్తుంది.",
+            ["ConnectCalendarButton"] = "Google Calendarను కనెక్ట్ చేయండి",
+            ["ConnectedOn"] = "కనెక్ట్ చేయబడింది",
+            ["SyncFailedWarning"] = "Google Calendarకు చివరి సింక్ విఫలమైంది — మీ అపాయింట్‌మెంట్ జననిలో అయినా సేవ్ చేయబడింది. ఇది పదేపదే జరుగుతుంటే, మళ్లీ కనెక్ట్ చేయడానికి ప్రయత్నించండి.",
+            ["SyncAutomatically"] = "కొత్త అపాయింట్‌మెంట్‌లను స్వయంచాలకంగా సింక్ చేయండి",
+            ["Disconnect"] = "డిస్‌కనెక్ట్ చేయండి",
+            ["NotificationsHeading"] = "నోటిఫికేషన్‌లు",
+            ["NotificationsHint"] = "జననీ తెరవకపోయినా నోటిఫికేషన్ పొందండి — వృద్ధుల ఆరోగ్య సూచనలు లేదా శిశు ఎదుగుదల సంబంధిత ఆందోళనల కోసం, వీటికి శ్రద్ధ అవసరం.",
+            ["NotificationsOn"] = "ఈ పరికరం కోసం నోటిఫికేషన్‌లు ఆన్‌లో ఉన్నాయి.",
+            ["Enabling"] = "ప్రారంభిస్తోంది...",
+            ["EnableNotifications"] = "నోటిఫికేషన్‌లను ప్రారంభించండి",
+            ["DoctorAlertHeading"] = "డాక్టర్ అలర్ట్ ఇమెయిల్‌లు",
+            ["DoctorAlertHint"] = "మీరు చూసుకుంటున్న వ్యక్తికి క్రిటికల్ ఆందోళన ఫ్లాగ్ అయిన వెంటనే జననీ నిర్దేశిత డాక్టర్‌కు స్వయంచాలకంగా ఇమెయిల్ పంపగలిగేలా Gmailను కనెక్ట్ చేయండి — ప్రతి వృద్ధుల/శిశు ప్రొఫైల్‌లో డాక్టర్ ఇమెయిల్‌ను సెట్ చేయండి.",
+            ["ConnectGmailButton"] = "Gmailను కనెక్ట్ చేయండి",
+            ["EmailSendFailedWarning"] = "చివరి డాక్టర్ అలర్ట్ ఇమెయిల్ పంపడంలో విఫలమైంది. ఇది పదేపదే జరుగుతుంటే, మళ్లీ కనెక్ట్ చేయడానికి ప్రయత్నించండి.",
+            ["BannerCalendarConnected"] = "Google Calendar కనెక్ట్ అయింది — కొత్త అపాయింట్‌మెంట్‌లు స్వయంచాలకంగా సింక్ అవుతాయి. 🌸",
+            ["BannerCalendarDisconnected"] = "Google Calendar డిస్‌కనెక్ట్ అయింది.",
+            ["BannerCalendarError"] = "Google Calendarను కనెక్ట్ చేయడంలో ఏదో తప్పు జరిగింది — దయచేసి మళ్లీ ప్రయత్నించండి.",
+            ["BannerGmailConnected"] = "Gmail కనెక్ట్ అయింది — డాక్టర్ అలర్ట్ ఇమెయిల్‌లు ఆన్‌లో ఉన్నాయి. 🌸",
+            ["BannerGmailDisconnected"] = "Gmail డిస్‌కనెక్ట్ అయింది — డాక్టర్ అలర్ట్ ఇమెయిల్‌లు ఆఫ్‌లో ఉన్నాయి.",
+            ["BannerGmailError"] = "Gmailను కనెక్ట్ చేయడంలో ఏదో తప్పు జరిగింది — దయచేసి మళ్లీ ప్రయత్నించండి.",
+            ["PushDenied"] = "నోటిఫికేషన్‌లు బ్లాక్ చేయబడ్డాయి — మీరు వాటిని మీ బ్రౌజర్ సైట్ సెట్టింగ్‌ల నుండి అనుమతించవచ్చు.",
+            ["PushUnsupported"] = "ఈ బ్రౌజర్ పుష్ నోటిఫికేషన్‌లకు మద్దతు ఇవ్వదు.",
+            ["PushError"] = "నోటిఫికేషన్‌లను ప్రారంభించడంలో ఏదో తప్పు జరిగింది — దయచేసి మళ్లీ ప్రయత్నించండి.",
+        },
+    };
+
+    private string T(string key) =>
+        (Strings.TryGetValue(_language, out var dict) && dict.TryGetValue(key, out var value))
+            ? value
+            : Strings["English"][key];
+}

@@ -1,0 +1,775 @@
+@page "/elder-care"
+@using Janani.Models
+@using Janani.Data
+@using Janani.Services
+@using Microsoft.EntityFrameworkCore
+@inject AppDbContext Db
+@inject CurrentUserService CurrentUser
+@inject BloomAgentRegistry Agents
+@inject UserProfileCache ProfileCache
+@inject PushNotificationService PushNotifications
+@inject IEmailNotificationService EmailNotifications
+@inject CareAccessService CareAccess
+@implements IDisposable
+@rendermode InteractiveServer
+
+<PageTitle>Janani — Elder Care</PageTitle>
+
+<div class="bloom-container">
+    <div class="section-header">
+        <h1>🌼 @T("Title")</h1>
+        <p class="subtitle">@T("Subtitle")</p>
+    </div>
+
+    @if (_elders.Any())
+    {
+        <div class="feeling-grid">
+            @foreach (var elder in _elders)
+            {
+                <button class="feeling-btn @(_selectedElder?.Id == elder.Id ? "selected" : "")" @onclick="() => SelectElderAsync(elder)">
+                    <span>👤</span>
+                    <span class="feeling-label">@elder.Name</span>
+                </button>
+            }
+        </div>
+    }
+    else if (!_addingElder)
+    {
+        <div class="empty-state">
+            <p>@T("EmptyTitle")</p>
+            <p>@T("EmptyHint")</p>
+        </div>
+    }
+
+    @if (_addingElder)
+    {
+        <div class="appointment-form">
+            <h3>@T("AddHeading")</h3>
+            <div class="form-row">
+                <div class="form-field">
+                    <label>@T("NameLabel")</label>
+                    <input @bind="_newName" placeholder="@T("NamePlaceholder")" />
+                </div>
+                <div class="form-field">
+                    <label>@T("AgeLabel")</label>
+                    <input type="number" @bind="_newAge" min="0" max="120" />
+                </div>
+            </div>
+            <div class="form-field">
+                <label>@T("RelationLabel")</label>
+                <input @bind="_newRelation" placeholder="@T("RelationPlaceholder")" />
+            </div>
+            <div class="form-field">
+                <label>@T("MedicalNotesLabel")</label>
+                <textarea @bind="_newMedicalNotes" placeholder="@T("MedicalNotesPlaceholder")" rows="2"></textarea>
+            </div>
+            <div class="form-actions">
+                <button class="bloom-btn primary" @onclick="SaveElderAsync" disabled="@string.IsNullOrWhiteSpace(_newName)">
+                    @T("SaveHeart")
+                </button>
+                <button class="bloom-btn secondary" @onclick="() => _addingElder = false">@T("Cancel")</button>
+            </div>
+        </div>
+    }
+    else
+    {
+        <button class="bloom-btn secondary new-entry-btn" @onclick="() => _addingElder = true">
+            @T("AddSomeoneBtn")
+        </button>
+    }
+
+    @if (_selectedElder != null)
+    {
+        <div class="daily-plan">
+            <div class="plan-header">
+                <h2>@string.Format(T("CaringFor"), _selectedElder.Name)</h2>
+                <a class="bloom-btn secondary small-btn" href="@($"/elder-care/export/{_selectedElder.Id}")">🖨️ @T("ExportBtn")</a>
+                <a class="bloom-btn secondary small-btn" href="@($"/elder-mode/{_selectedElder.Id}")">👵 @T("ElderModeBtn")</a>
+            </div>
+
+            @if (_activeAlert != null)
+            {
+                <div class="sos-safety-note">
+                    <p>@(_activeAlert.Severity == AlertSeverity.Critical ? "🚨" : "⚠️") @_activeAlert.Message</p>
+                    <a class="bloom-btn primary small-btn" href="@($"/emergency?about=elder-{_selectedElder.Id}")">🆘 @T("SendSosBtn")</a>
+                    <button class="bloom-btn secondary small-btn" @onclick="AcknowledgeAlertAsync">@T("SeenThisBtn")</button>
+                </div>
+            }
+
+            <div class="plan-card">
+                <h3>🩺 @T("DoctorSectionTitle")</h3>
+                <p class="sos-hint">@T("DoctorSectionHint")</p>
+                <div class="form-row">
+                    <input @bind="_doctorNameInput" placeholder="@T("DoctorNamePlaceholder")" />
+                    <input @bind="_doctorEmailInput" placeholder="@T("DoctorEmailPlaceholder")" type="email" />
+                </div>
+                <button class="bloom-btn secondary small-btn" @onclick="SaveDoctorContactAsync">@T("Save")</button>
+                @if (_doctorSaved) { <span class="sos-hint">✅ @T("Saved")</span> }
+            </div>
+
+            @if (_selectedElder.UserId == _currentUserId)
+            {
+                <div class="plan-card">
+                    <h3>👨‍👩‍👧 @T("ShareSectionTitle")</h3>
+                    <p class="sos-hint">@string.Format(T("ShareHint"), _selectedElder.Name)</p>
+                    @if (_shares.Count > 0)
+                    {
+                        <div class="contact-list">
+                            @foreach (var share in _shares)
+                            {
+                                <div class="contact-card">
+                                    <div class="contact-info">
+                                        <strong>@share.Username</strong>
+                                        <span class="contact-relation">@string.Format(T("SharedPrefix"), share.GrantedAt.ToLocalTime().ToString("dd MMM yyyy"))</span>
+                                    </div>
+                                    <button class="icon-btn" title="@T("RevokeTitle")" aria-label="@string.Format(T("RevokeAriaTemplate"), share.Username)" @onclick="() => RevokeShareAsync(share.ShareId)">✕</button>
+                                </div>
+                            }
+                        </div>
+                    }
+                    <div class="form-row">
+                        <input @bind="_shareUsernameInput" placeholder="@T("UsernamePlaceholder")" />
+                    </div>
+                    <button class="bloom-btn secondary small-btn" @onclick="ShareElderAsync">@T("ShareAccessBtn")</button>
+                    @if (_shareError != null) { <p class="sos-hint">💗 @_shareError</p> }
+                </div>
+            }
+
+            @if (_recentVitals != null)
+            {
+                <div class="plan-card">
+                    <h3>🩺 @T("LastVitalsTitle")</h3>
+                    <p>@BuildVitalsSummary(_recentVitals) — @FormatAgo(_recentVitals.RecordedAt)</p>
+                    <p class="sos-hint">@(string.IsNullOrEmpty(_recentVitals.Source) ? T("LoggedManually") : string.Format(T("SyncedFromTemplate"), _recentVitals.Source))</p>
+                </div>
+            }
+
+            @if (_systolicTrend.Count >= 2)
+            {
+                <div class="plan-card">
+                    <h3>📈 @T("SystolicTrendTitle")</h3>
+                    <TrendChart Values="_systolicTrend" Unit=" mmHg" Color="var(--urgent)" />
+                </div>
+            }
+
+            <RecommendedReading Topic="elder-caregiving" />
+
+            <div class="form-field">
+                <label>@T("LogVitalsLabel")</label>
+                <div class="form-row">
+                    <input type="number" @bind="_vitalsSystolic" placeholder="@T("SystolicPlaceholder")" />
+                    <input type="number" @bind="_vitalsDiastolic" placeholder="@T("DiastolicPlaceholder")" />
+                    <input type="number" @bind="_vitalsHeartRate" placeholder="@T("HeartRatePlaceholder")" />
+                </div>
+                <div class="form-row">
+                    <input type="number" step="0.1" @bind="_vitalsTemperature" placeholder="@T("TempPlaceholder")" />
+                    <input type="number" @bind="_vitalsOxygen" placeholder="@T("OxygenPlaceholder")" />
+                </div>
+                <button class="bloom-btn secondary small-btn" @onclick="SaveVitalsAsync" disabled="@_checkingVitals">
+                    @(_checkingVitals ? T("CheckingBtn") : T("LogVitalsBtn"))
+                </button>
+                <button class="bloom-btn secondary small-btn" @onclick="SimulateDeviceSyncAsync" disabled="@_checkingVitals" title="@T("SimulateSyncTitle")">
+                    🔗 @T("SimulateSyncBtn")
+                </button>
+            </div>
+
+            @if (_plan == null)
+            {
+                <div class="note-section">
+                    <label>@T("MoodLabel")</label>
+                    <textarea @bind="_moodDescription" placeholder="@T("MoodPlaceholder")" rows="2"></textarea>
+                </div>
+
+                <button class="bloom-btn primary" @onclick="GeneratePlanAsync"
+                        disabled="@(string.IsNullOrWhiteSpace(_moodDescription) || _generating)">
+                    @if (_generating) { <span>@T("CreatingPlan")</span> } else { <span>@T("GetGuidance")</span> }
+                </button>
+
+                @if (_error != null)
+                {
+                    <div class="meal-gentle-note error-note">
+                        <p>💗 @_error</p>
+                        <button class="bloom-btn secondary small-btn" @onclick="GeneratePlanAsync">@T("TryAgain")</button>
+                    </div>
+                }
+            }
+            else
+            {
+                <div class="plan-card acknowledgment">
+                    <p>@_plan.Acknowledgment</p>
+                </div>
+
+                <div class="plan-section">
+                    <h3>💧 @T("TodaysSmallSteps")</h3>
+                    <ul class="suggestion-list">
+                        @foreach (var s in _plan.Suggestions)
+                        {
+                            <li>@s</li>
+                        }
+                    </ul>
+                </div>
+
+                <div class="plan-card calming">
+                    <h3>🎵 @T("MomentOfCalm")</h3>
+                    <p>@_plan.CalmingRecommendation</p>
+                </div>
+
+                <div class="plan-card week-note">
+                    <h3>📝 @T("ForYou")</h3>
+                    <p>@_plan.CaregiverNote</p>
+                </div>
+
+                <button class="bloom-btn secondary checkin-again-btn" @onclick="() => _plan = null">
+                    @T("CheckInAgain")
+                </button>
+            }
+        </div>
+    }
+</div>
+
+@code {
+    private List<ElderProfile> _elders = [];
+    private ElderProfile? _selectedElder;
+    private VitalsReading? _recentVitals;
+    private bool _addingElder;
+    private string _newName = string.Empty;
+    private int _newAge = 70;
+    private string _newRelation = string.Empty;
+    private string? _newMedicalNotes;
+    private string _doctorNameInput = string.Empty;
+    private string _doctorEmailInput = string.Empty;
+    private bool _doctorSaved;
+
+    private int? _vitalsSystolic;
+    private int? _vitalsDiastolic;
+    private int? _vitalsHeartRate;
+    private decimal? _vitalsTemperature;
+    private int? _vitalsOxygen;
+    private Alert? _activeAlert;
+    private bool _checkingVitals;
+    private List<decimal> _systolicTrend = [];
+
+    private string _moodDescription = string.Empty;
+    private ElderDailyPlan? _plan;
+    private bool _generating;
+    private string? _error;
+    private CancellationTokenSource? _cts;
+
+    private int _currentUserId;
+    private List<ShareInfo> _shares = [];
+    private string _shareUsernameInput = string.Empty;
+    private string? _shareError;
+    private string _language = "English";
+
+    protected override async Task OnInitializedAsync()
+    {
+        _currentUserId = await CurrentUser.GetUserIdAsync();
+        var profile = await ProfileCache.GetAsync();
+        _language = (profile?.Language ?? AppLanguage.English).ToString();
+        await LoadEldersAsync();
+    }
+
+    private async Task LoadEldersAsync()
+    {
+        var userId = await CurrentUser.GetUserIdAsync();
+        var accessibleIds = await CareAccess.GetAccessibleElderIdsAsync(userId);
+        _elders = await Db.ElderProfiles.AsNoTracking()
+            .Where(e => accessibleIds.Contains(e.Id))
+            .OrderBy(e => e.Name)
+            .ToListAsync();
+    }
+
+    private async Task SaveElderAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_newName)) return;
+
+        Db.ElderProfiles.Add(new ElderProfile
+        {
+            UserId = await CurrentUser.GetUserIdAsync(),
+            Name = _newName.Trim(),
+            Age = _newAge,
+            Relation = string.IsNullOrWhiteSpace(_newRelation) ? T("FamilyMemberDefault") : _newRelation.Trim(),
+            MedicalNotes = string.IsNullOrWhiteSpace(_newMedicalNotes) ? null : _newMedicalNotes.Trim()
+        });
+        await Db.SaveChangesAsync();
+
+        _newName = string.Empty;
+        _newAge = 70;
+        _newRelation = string.Empty;
+        _newMedicalNotes = null;
+        _addingElder = false;
+        await LoadEldersAsync();
+    }
+
+    private async Task SelectElderAsync(ElderProfile elder)
+    {
+        _selectedElder = elder;
+        _plan = null;
+        _moodDescription = string.Empty;
+        _doctorNameInput = elder.DoctorName ?? string.Empty;
+        _doctorEmailInput = elder.DoctorEmail ?? string.Empty;
+        _doctorSaved = false;
+        _recentVitals = await Db.VitalsReadings.AsNoTracking()
+            .Where(v => v.ElderProfileId == elder.Id)
+            .OrderByDescending(v => v.RecordedAt)
+            .FirstOrDefaultAsync();
+        _activeAlert = await Db.Alerts.AsNoTracking()
+            .Where(a => a.ElderProfileId == elder.Id && !a.Acknowledged)
+            .OrderByDescending(a => a.TriggeredAt)
+            .FirstOrDefaultAsync();
+        await LoadSystolicTrendAsync();
+
+        _shareUsernameInput = string.Empty;
+        _shareError = null;
+        _shares = elder.UserId == _currentUserId
+            ? await CareAccess.GetSharesForElderAsync(elder.Id)
+            : [];
+    }
+
+    private async Task ShareElderAsync()
+    {
+        if (_selectedElder == null || string.IsNullOrWhiteSpace(_shareUsernameInput)) return;
+        _shareError = await CareAccess.GrantElderAccessAsync(_selectedElder.Id, _shareUsernameInput, _currentUserId);
+        if (_shareError == null)
+        {
+            _shareUsernameInput = string.Empty;
+            _shares = await CareAccess.GetSharesForElderAsync(_selectedElder.Id);
+        }
+    }
+
+    private async Task RevokeShareAsync(int shareId)
+    {
+        if (_selectedElder == null) return;
+        await CareAccess.RevokeAsync(shareId, _currentUserId);
+        _shares = await CareAccess.GetSharesForElderAsync(_selectedElder.Id);
+    }
+
+    private async Task LoadSystolicTrendAsync()
+    {
+        if (_selectedElder == null) return;
+        var recent = await Db.VitalsReadings.AsNoTracking()
+            .Where(v => v.ElderProfileId == _selectedElder.Id && v.SystolicBp != null)
+            .OrderByDescending(v => v.RecordedAt)
+            .Take(10)
+            .Select(v => v.SystolicBp!.Value)
+            .ToListAsync();
+        recent.Reverse(); // oldest first, so the chart reads left-to-right chronologically
+        _systolicTrend = recent.Select(v => (decimal)v).ToList();
+    }
+
+    private async Task SaveDoctorContactAsync()
+    {
+        if (_selectedElder == null) return;
+        var name = string.IsNullOrWhiteSpace(_doctorNameInput) ? null : _doctorNameInput.Trim();
+        var email = string.IsNullOrWhiteSpace(_doctorEmailInput) ? null : _doctorEmailInput.Trim();
+
+        await Db.ElderProfiles.Where(e => e.Id == _selectedElder.Id)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(e => e.DoctorName, name)
+                .SetProperty(e => e.DoctorEmail, email));
+
+        _selectedElder.DoctorName = name;
+        _selectedElder.DoctorEmail = email;
+        _doctorSaved = true;
+    }
+
+    private async Task SaveVitalsAsync()
+    {
+        if (_selectedElder == null) return;
+
+        var reading = new VitalsReading
+        {
+            ElderProfileId = _selectedElder.Id,
+            SystolicBp = _vitalsSystolic,
+            DiastolicBp = _vitalsDiastolic,
+            HeartRate = _vitalsHeartRate,
+            TemperatureC = _vitalsTemperature,
+            OxygenSaturation = _vitalsOxygen
+        };
+
+        _vitalsSystolic = null;
+        _vitalsDiastolic = null;
+        _vitalsHeartRate = null;
+        _vitalsTemperature = null;
+        _vitalsOxygen = null;
+
+        await ProcessVitalsReadingAsync(reading);
+    }
+
+    // Stands in for a real device-cloud sync (Withings, Omron, etc.) until
+    // one is actually wired up — generates a plausible reading exactly the
+    // shape a real BP cuff would report, and runs it through the identical
+    // pipeline a manual entry does (threshold check, alert, push/email),
+    // so the "device already reported something concerning" story is
+    // demoable today without vendor API access or owning hardware.
+    private static readonly Random _deviceRandom = new();
+
+    private async Task SimulateDeviceSyncAsync()
+    {
+        if (_selectedElder == null) return;
+
+        // Weighted toward normal readings, occasionally abnormal — mirrors
+        // how a real device intermittently catches a genuine concern rather
+        // than every reading being dramatic.
+        var abnormal = _deviceRandom.NextDouble() < 0.25;
+        var reading = new VitalsReading
+        {
+            ElderProfileId = _selectedElder.Id,
+            SystolicBp = abnormal ? _deviceRandom.Next(182, 205) : _deviceRandom.Next(105, 135),
+            DiastolicBp = _deviceRandom.Next(65, 90),
+            HeartRate = _deviceRandom.Next(62, 95),
+            TemperatureC = 36.5m + (decimal)(_deviceRandom.NextDouble() * 0.8 - 0.2),
+            OxygenSaturation = abnormal && _deviceRandom.NextDouble() < 0.4 ? _deviceRandom.Next(86, 91) : _deviceRandom.Next(94, 99),
+            Source = "Withings BPM Connect (simulated)"
+        };
+
+        await ProcessVitalsReadingAsync(reading);
+    }
+
+    private async Task ProcessVitalsReadingAsync(VitalsReading reading)
+    {
+        if (_selectedElder == null) return;
+
+        Db.VitalsReadings.Add(reading);
+        await Db.SaveChangesAsync();
+        await LoadSystolicTrendAsync();
+        _recentVitals = reading;
+
+        // Deterministic check first (no network call for the normal case);
+        // the agent is only invoked once a concern already exists, to
+        // explain it — see VitalsThresholdChecker for why.
+        var concerns = VitalsThresholdChecker.Check(reading);
+        if (concerns.Count > 0)
+        {
+            _checkingVitals = true;
+            StateHasChanged();
+            try
+            {
+                var severity = concerns.Any(c => c.Severity == AlertSeverity.Critical)
+                    ? AlertSeverity.Critical
+                    : AlertSeverity.Warning;
+                var language = (await ProfileCache.GetAsync())?.Language ?? AppLanguage.English;
+                var (explanation, suggestedAction) = await Agents.HealthMonitor.ExplainAsync(_selectedElder, concerns, severity, language);
+
+                var alert = new Alert
+                {
+                    ElderProfileId = _selectedElder.Id,
+                    VitalsReadingId = reading.Id,
+                    Severity = severity,
+                    Message = $"{explanation} {suggestedAction}"
+                };
+                Db.Alerts.Add(alert);
+                await Db.SaveChangesAsync();
+                _activeAlert = alert;
+                await NotifyElderAlertAsync(alert);
+            }
+            catch (Exception)
+            {
+                // The vitals reading itself is already saved — an explanation
+                // failure shouldn't hide that a concern was flagged at all.
+                _activeAlert = new Alert
+                {
+                    ElderProfileId = _selectedElder.Id,
+                    VitalsReadingId = reading.Id,
+                    Severity = concerns.Any(c => c.Severity == AlertSeverity.Critical) ? AlertSeverity.Critical : AlertSeverity.Warning,
+                    Message = string.Join("; ", concerns.Select(c => c.Description))
+                };
+                await NotifyElderAlertAsync(_activeAlert);
+            }
+            _checkingVitals = false;
+        }
+    }
+
+    private async Task NotifyElderAlertAsync(Alert alert)
+    {
+        if (_selectedElder == null) return;
+        var prefix = alert.Severity == AlertSeverity.Critical ? "🚨" : "⚠️";
+
+        // Every caregiver with access to this elder gets pushed — not just
+        // whoever happened to be logging the reading — since sharing exists
+        // precisely so a critical alert reaches the whole family, not one person.
+        var caregiverIds = await CareAccess.GetCaregiverUserIdsForElderAsync(_selectedElder.Id);
+        foreach (var caregiverId in caregiverIds)
+        {
+            await PushNotifications.NotifyUserAsync(caregiverId, $"{prefix} {_selectedElder.Name} needs attention", alert.Message);
+        }
+
+        // Only Critical escalates to the doctor by email — Warning stays
+        // in-app/push only, so the doctor isn't paged for routine flags.
+        // Sent once via whichever caregiver has Gmail connected, not once
+        // per caregiver.
+        if (alert.Severity == AlertSeverity.Critical && !string.IsNullOrWhiteSpace(_selectedElder.DoctorEmail))
+        {
+            var subject = $"Urgent: {_selectedElder.Name} may need attention (via Janani)";
+            var body = $"{alert.Message}\n\nThis is an automated alert from Janani, a family caregiving app, " +
+                       $"sent on behalf of {_selectedElder.Name}'s caregiver because a critical concern was flagged.";
+            foreach (var caregiverId in caregiverIds)
+            {
+                if (await EmailNotifications.SendDoctorAlertAsync(caregiverId, _selectedElder.DoctorEmail!, _selectedElder.DoctorName ?? "Doctor", subject, body))
+                    break;
+            }
+        }
+    }
+
+    private async Task AcknowledgeAlertAsync()
+    {
+        if (_activeAlert == null) return;
+        var alert = await Db.Alerts.FindAsync(_activeAlert.Id);
+        if (alert != null)
+        {
+            alert.Acknowledged = true;
+            await Db.SaveChangesAsync();
+        }
+        _activeAlert = null;
+    }
+
+    private async Task GeneratePlanAsync()
+    {
+        if (_selectedElder == null || string.IsNullOrWhiteSpace(_moodDescription)) return;
+        _generating = true;
+        _error = null;
+        StateHasChanged();
+
+        _cts?.Cancel();
+        _cts = new CancellationTokenSource();
+
+        try
+        {
+            var vitalsSummary = _recentVitals != null ? BuildVitalsSummary(_recentVitals) : null;
+            var language = (await ProfileCache.GetAsync())?.Language ?? AppLanguage.English;
+            _plan = await Agents.ElderNurture.GenerateDailyPlanAsync(
+                _selectedElder, _moodDescription, vitalsSummary, null, language, _cts.Token);
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception)
+        {
+            _error = T("GenericRetryError");
+        }
+
+        _generating = false;
+    }
+
+    private string BuildVitalsSummary(VitalsReading v)
+    {
+        var parts = new List<string>();
+        if (v.SystolicBp.HasValue && v.DiastolicBp.HasValue) parts.Add($"BP {v.SystolicBp}/{v.DiastolicBp}");
+        if (v.HeartRate.HasValue) parts.Add($"HR {v.HeartRate} bpm");
+        if (v.TemperatureC.HasValue) parts.Add($"Temp {v.TemperatureC}°C");
+        if (v.OxygenSaturation.HasValue) parts.Add($"O2 {v.OxygenSaturation}%");
+        return parts.Count > 0 ? string.Join(", ", parts) : T("NoReadingsLogged");
+    }
+
+    private string FormatAgo(DateTime recordedAt)
+    {
+        var span = DateTime.UtcNow - recordedAt;
+        if (span.TotalMinutes < 60) return $"{(int)span.TotalMinutes}{T("MinAgo")}";
+        if (span.TotalHours < 24) return $"{(int)span.TotalHours}{T("HourAgo")}";
+        return $"{(int)span.TotalDays}{T("DayAgo")}";
+    }
+
+    public void Dispose() => _cts?.Cancel();
+
+    private static readonly Dictionary<string, Dictionary<string, string>> Strings = new()
+    {
+        ["English"] = new()
+        {
+            ["Title"] = "Elder Care",
+            ["Subtitle"] = "Track how they're doing, log vitals when you have them, and get a gentle daily plan for caring for them.",
+            ["EmptyTitle"] = "No one added yet 🌷",
+            ["EmptyHint"] = "Add the family member you're caring for to get started.",
+            ["AddHeading"] = "Add someone you care for",
+            ["NameLabel"] = "Name",
+            ["NamePlaceholder"] = "e.g. Amma, Grandpa Joe",
+            ["AgeLabel"] = "Age",
+            ["RelationLabel"] = "Relation to you",
+            ["RelationPlaceholder"] = "e.g. Mother, Father-in-law, Grandmother",
+            ["MedicalNotesLabel"] = "Medical notes (optional)",
+            ["MedicalNotesPlaceholder"] = "Conditions, medications, anything worth knowing",
+            ["SaveHeart"] = "Save 💗",
+            ["Cancel"] = "Cancel",
+            ["AddSomeoneBtn"] = "+ Add someone",
+            ["CaringFor"] = "Caring for {0}",
+            ["ExportBtn"] = "Export for doctor visit",
+            ["ElderModeBtn"] = "Elder Mode",
+            ["SendSosBtn"] = "Send SOS about this",
+            ["SeenThisBtn"] = "I've seen this",
+            ["DoctorSectionTitle"] = "Doctor for critical alerts",
+            ["DoctorSectionHint"] = "If something Critical is flagged, Janani can automatically email this doctor (needs Gmail connected in Settings).",
+            ["DoctorNamePlaceholder"] = "Doctor's name",
+            ["DoctorEmailPlaceholder"] = "Doctor's email",
+            ["Save"] = "Save",
+            ["Saved"] = "Saved",
+            ["ShareSectionTitle"] = "Share with another caregiver",
+            ["ShareHint"] = "Give another Janani account full access to {0} — vitals, alerts, plans, everything you see.",
+            ["SharedPrefix"] = "Shared {0}",
+            ["RevokeTitle"] = "Revoke access",
+            ["RevokeAriaTemplate"] = "Revoke {0}'s access",
+            ["UsernamePlaceholder"] = "Their Janani username",
+            ["ShareAccessBtn"] = "Share access",
+            ["LastVitalsTitle"] = "Last recorded vitals",
+            ["LoggedManually"] = "Logged manually",
+            ["SyncedFromTemplate"] = "Synced from {0}",
+            ["SystolicTrendTitle"] = "Systolic BP trend",
+            ["LogVitalsLabel"] = "Log new vitals (optional)",
+            ["SystolicPlaceholder"] = "Systolic BP",
+            ["DiastolicPlaceholder"] = "Diastolic BP",
+            ["HeartRatePlaceholder"] = "Heart rate",
+            ["TempPlaceholder"] = "Temp (°C)",
+            ["OxygenPlaceholder"] = "O2 saturation %",
+            ["CheckingBtn"] = "Checking...",
+            ["LogVitalsBtn"] = "Log vitals",
+            ["SimulateSyncBtn"] = "Simulate device sync",
+            ["SimulateSyncTitle"] = "Stands in for a real connected BP monitor until one is wired up",
+            ["MoodLabel"] = "How are they doing today?",
+            ["MoodPlaceholder"] = "e.g. tired but cheerful, a bit confused this morning, in good spirits",
+            ["CreatingPlan"] = "Creating your plan... 💗",
+            ["GetGuidance"] = "Get today's guidance 🌸",
+            ["TryAgain"] = "Try again",
+            ["TodaysSmallSteps"] = "Today's small steps",
+            ["MomentOfCalm"] = "A moment of calm",
+            ["ForYou"] = "For you",
+            ["CheckInAgain"] = "Check in again",
+            ["FamilyMemberDefault"] = "Family member",
+            ["NoReadingsLogged"] = "No readings logged",
+            ["MinAgo"] = " min ago",
+            ["HourAgo"] = "h ago",
+            ["DayAgo"] = "d ago",
+            ["GenericRetryError"] = "That took a wrong turn — could you try again?",
+        },
+        ["Hindi"] = new()
+        {
+            ["Title"] = "बुज़ुर्ग देखभाल",
+            ["Subtitle"] = "देखें कि वे कैसा कर रहे हैं, जब आपके पास हो तो वाइटल्स दर्ज करें, और उनकी देखभाल के लिए एक सौम्य दैनिक योजना पाएं।",
+            ["EmptyTitle"] = "अभी तक कोई नहीं जोड़ा गया 🌷",
+            ["EmptyHint"] = "शुरू करने के लिए उस परिवार के सदस्य को जोड़ें जिसकी आप देखभाल कर रहे हैं।",
+            ["AddHeading"] = "जिसकी आप देखभाल करते हैं उसे जोड़ें",
+            ["NameLabel"] = "नाम",
+            ["NamePlaceholder"] = "जैसे: अम्मा, दादाजी",
+            ["AgeLabel"] = "उम्र",
+            ["RelationLabel"] = "आपसे संबंध",
+            ["RelationPlaceholder"] = "जैसे: माँ, ससुर, दादी",
+            ["MedicalNotesLabel"] = "मेडिकल नोट्स (वैकल्पिक)",
+            ["MedicalNotesPlaceholder"] = "स्थितियां, दवाइयां, जो भी जानना ज़रूरी हो",
+            ["SaveHeart"] = "सहेजें 💗",
+            ["Cancel"] = "रद्द करें",
+            ["AddSomeoneBtn"] = "+ किसी को जोड़ें",
+            ["CaringFor"] = "{0} की देखभाल",
+            ["ExportBtn"] = "डॉक्टर विज़िट के लिए एक्सपोर्ट करें",
+            ["ElderModeBtn"] = "बुज़ुर्ग मोड",
+            ["SendSosBtn"] = "इसके बारे में SOS भेजें",
+            ["SeenThisBtn"] = "मैंने इसे देख लिया है",
+            ["DoctorSectionTitle"] = "गंभीर अलर्ट के लिए डॉक्टर",
+            ["DoctorSectionHint"] = "यदि कुछ गंभीर के रूप में चिह्नित होता है, तो जनानी अपने आप इस डॉक्टर को ईमेल कर सकती है (सेटिंग्स में Gmail कनेक्ट होना ज़रूरी है)।",
+            ["DoctorNamePlaceholder"] = "डॉक्टर का नाम",
+            ["DoctorEmailPlaceholder"] = "डॉक्टर का ईमेल",
+            ["Save"] = "सहेजें",
+            ["Saved"] = "सहेजा गया",
+            ["ShareSectionTitle"] = "किसी अन्य देखभालकर्ता के साथ साझा करें",
+            ["ShareHint"] = "किसी अन्य जनानी खाते को {0} तक पूरी पहुंच दें — वाइटल्स, अलर्ट, योजनाएं, जो कुछ भी आप देखते हैं।",
+            ["SharedPrefix"] = "साझा किया गया {0}",
+            ["RevokeTitle"] = "पहुंच रद्द करें",
+            ["RevokeAriaTemplate"] = "{0} की पहुंच रद्द करें",
+            ["UsernamePlaceholder"] = "उनका जनानी उपयोगकर्ता नाम",
+            ["ShareAccessBtn"] = "पहुंच साझा करें",
+            ["LastVitalsTitle"] = "आखिरी दर्ज वाइटल्स",
+            ["LoggedManually"] = "मैन्युअल रूप से दर्ज किया गया",
+            ["SyncedFromTemplate"] = "{0} से सिंक किया गया",
+            ["SystolicTrendTitle"] = "सिस्टोलिक बीपी रुझान",
+            ["LogVitalsLabel"] = "नए वाइटल्स दर्ज करें (वैकल्पिक)",
+            ["SystolicPlaceholder"] = "सिस्टोलिक बीपी",
+            ["DiastolicPlaceholder"] = "डायस्टोलिक बीपी",
+            ["HeartRatePlaceholder"] = "हृदय गति",
+            ["TempPlaceholder"] = "तापमान (°C)",
+            ["OxygenPlaceholder"] = "O2 सैचुरेशन %",
+            ["CheckingBtn"] = "जांच हो रही है...",
+            ["LogVitalsBtn"] = "वाइटल्स दर्ज करें",
+            ["SimulateSyncBtn"] = "डिवाइस सिंक का अनुकरण करें",
+            ["SimulateSyncTitle"] = "एक असली कनेक्टेड बीपी मॉनिटर के जुड़ने तक इसकी जगह काम करता है",
+            ["MoodLabel"] = "आज वे कैसा महसूस कर रहे हैं?",
+            ["MoodPlaceholder"] = "जैसे: थके हुए पर खुश, आज सुबह थोड़े उलझे हुए, अच्छे मूड में",
+            ["CreatingPlan"] = "आपकी योजना बन रही है... 💗",
+            ["GetGuidance"] = "आज का मार्गदर्शन पाएं 🌸",
+            ["TryAgain"] = "फिर से कोशिश करें",
+            ["TodaysSmallSteps"] = "आज के छोटे कदम",
+            ["MomentOfCalm"] = "शांति का एक पल",
+            ["ForYou"] = "आपके लिए",
+            ["CheckInAgain"] = "फिर से चेक इन करें",
+            ["FamilyMemberDefault"] = "परिवार का सदस्य",
+            ["NoReadingsLogged"] = "कोई रीडिंग दर्ज नहीं",
+            ["MinAgo"] = " मिनट पहले",
+            ["HourAgo"] = " घंटे पहले",
+            ["DayAgo"] = " दिन पहले",
+            ["GenericRetryError"] = "कुछ गड़बड़ हो गई — क्या आप फिर से कोशिश कर सकती हैं?",
+        },
+        ["Telugu"] = new()
+        {
+            ["Title"] = "వృద్ధుల సంరక్షణ",
+            ["Subtitle"] = "వారు ఎలా ఉన్నారో గమనించండి, మీ వద్ద ఉన్నప్పుడు వైటల్స్ నమోదు చేయండి, మరియు వారి సంరక్షణ కోసం ఒక సున్నితమైన రోజువారీ ప్రణాళికను పొందండి.",
+            ["EmptyTitle"] = "ఇంకా ఎవరూ జోడించలేదు 🌷",
+            ["EmptyHint"] = "ప్రారంభించడానికి మీరు సంరక్షణ చేస్తున్న కుటుంబ సభ్యుడిని జోడించండి.",
+            ["AddHeading"] = "మీరు సంరక్షణ చేసే వ్యక్తిని జోడించండి",
+            ["NameLabel"] = "పేరు",
+            ["NamePlaceholder"] = "ఉదా: అమ్మ, తాతయ్య",
+            ["AgeLabel"] = "వయస్సు",
+            ["RelationLabel"] = "మీతో సంబంధం",
+            ["RelationPlaceholder"] = "ఉదా: తల్లి, మామగారు, అమ్మమ్మ",
+            ["MedicalNotesLabel"] = "వైద్య గమనికలు (ఐచ్ఛికం)",
+            ["MedicalNotesPlaceholder"] = "పరిస్థితులు, మందులు, తెలుసుకోవలసిన ఏదైనా",
+            ["SaveHeart"] = "సేవ్ చేయండి 💗",
+            ["Cancel"] = "రద్దు చేయండి",
+            ["AddSomeoneBtn"] = "+ ఎవరినైనా జోడించండి",
+            ["CaringFor"] = "{0} సంరక్షణ",
+            ["ExportBtn"] = "డాక్టర్ విజిట్ కోసం ఎగుమతి చేయండి",
+            ["ElderModeBtn"] = "వృద్ధుల మోడ్",
+            ["SendSosBtn"] = "దీని గురించి SOS పంపండి",
+            ["SeenThisBtn"] = "నేను దీన్ని చూశాను",
+            ["DoctorSectionTitle"] = "తీవ్రమైన హెచ్చరికల కోసం డాక్టర్",
+            ["DoctorSectionHint"] = "ఏదైనా తీవ్రమైనదిగా గుర్తించబడితే, జననీ స్వయంచాలకంగా ఈ డాక్టర్‌కి ఇమెయిల్ పంపగలదు (సెట్టింగ్‌లలో Gmail కనెక్ట్ చేసి ఉండాలి).",
+            ["DoctorNamePlaceholder"] = "డాక్టర్ పేరు",
+            ["DoctorEmailPlaceholder"] = "డాక్టర్ ఇమెయిల్",
+            ["Save"] = "సేవ్ చేయండి",
+            ["Saved"] = "సేవ్ చేయబడింది",
+            ["ShareSectionTitle"] = "మరొక సంరక్షకునితో పంచుకోండి",
+            ["ShareHint"] = "మరొక జననీ ఖాతాకు {0}కి పూర్తి యాక్సెస్ ఇవ్వండి — వైటల్స్, హెచ్చరికలు, ప్రణాళికలు, మీరు చూసేదంతా.",
+            ["SharedPrefix"] = "పంచుకున్నారు {0}",
+            ["RevokeTitle"] = "యాక్సెస్ రద్దు చేయండి",
+            ["RevokeAriaTemplate"] = "{0} యాక్సెస్‌ను రద్దు చేయండి",
+            ["UsernamePlaceholder"] = "వారి జననీ యూజర్‌నేమ్",
+            ["ShareAccessBtn"] = "యాక్సెస్ పంచుకోండి",
+            ["LastVitalsTitle"] = "చివరిగా నమోదు చేసిన వైటల్స్",
+            ["LoggedManually"] = "మాన్యువల్‌గా నమోదు చేయబడింది",
+            ["SyncedFromTemplate"] = "{0} నుండి సింక్ చేయబడింది",
+            ["SystolicTrendTitle"] = "సిస్టోలిక్ బీపీ ధోరణి",
+            ["LogVitalsLabel"] = "కొత్త వైటల్స్ నమోదు చేయండి (ఐచ్ఛికం)",
+            ["SystolicPlaceholder"] = "సిస్టోలిక్ బీపీ",
+            ["DiastolicPlaceholder"] = "డయాస్టోలిక్ బీపీ",
+            ["HeartRatePlaceholder"] = "హృదయ స్పందన రేటు",
+            ["TempPlaceholder"] = "ఉష్ణోగ్రత (°C)",
+            ["OxygenPlaceholder"] = "O2 సంతృప్తత %",
+            ["CheckingBtn"] = "తనిఖీ చేస్తోంది...",
+            ["LogVitalsBtn"] = "వైటల్స్ నమోదు చేయండి",
+            ["SimulateSyncBtn"] = "పరికర సింక్‌ను అనుకరించండి",
+            ["SimulateSyncTitle"] = "నిజమైన కనెక్ట్ చేసిన BP మానిటర్ అమర్చే వరకు దీని స్థానంలో పనిచేస్తుంది",
+            ["MoodLabel"] = "ఈరోజు వారు ఎలా ఉన్నారు?",
+            ["MoodPlaceholder"] = "ఉదా: అలసిపోయినా ఉల్లాసంగా, ఈ ఉదయం కొంచెం గందరగోళంగా, మంచి మూడ్‌లో",
+            ["CreatingPlan"] = "మీ ప్రణాళిక తయారవుతోంది... 💗",
+            ["GetGuidance"] = "ఈరోజు మార్గదర్శకత్వం పొందండి 🌸",
+            ["TryAgain"] = "మళ్ళీ ప్రయత్నించండి",
+            ["TodaysSmallSteps"] = "ఈరోజు చిన్న అడుగులు",
+            ["MomentOfCalm"] = "ప్రశాంతత క్షణం",
+            ["ForYou"] = "మీ కోసం",
+            ["CheckInAgain"] = "మళ్ళీ చెక్ ఇన్ చేయండి",
+            ["FamilyMemberDefault"] = "కుటుంబ సభ్యుడు",
+            ["NoReadingsLogged"] = "రీడింగ్‌లు నమోదు కాలేదు",
+            ["MinAgo"] = " నిమిషాల క్రితం",
+            ["HourAgo"] = " గంటల క్రితం",
+            ["DayAgo"] = " రోజుల క్రితం",
+            ["GenericRetryError"] = "ఏదో తప్పు జరిగింది — దయచేసి మళ్ళీ ప్రయత్నించగలరా?",
+        },
+    };
+
+    private string T(string key) =>
+        (Strings.TryGetValue(_language, out var dict) && dict.TryGetValue(key, out var value))
+            ? value
+            : Strings["English"][key];
+}

@@ -1,0 +1,6 @@
+google-adk[db]==2.7.1
+fastapi
+uvicorn[standard]
+python-dotenv
+asyncpg
+aiosqlite

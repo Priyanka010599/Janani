@@ -1,0 +1,201 @@
+@page "/partner"
+@using Janani.Services
+@using Janani.Data
+@using Microsoft.EntityFrameworkCore
+@inject BloomAgentRegistry Agents
+@inject AppDbContext Db
+@inject UserProfileCache ProfileCache
+@inject CurrentUserService CurrentUser
+@inject IJSRuntime JS
+@implements IDisposable
+@rendermode InteractiveServer
+
+<PageTitle>Janani — Partner Message</PageTitle>
+
+<div class="bloom-container">
+    <div class="section-header">
+        <h1>💌 @T("Title")</h1>
+        <p class="subtitle">
+            @T("Subtitle")
+        </p>
+    </div>
+
+    @if (_message == null && !_loading)
+    {
+        <div class="partner-form">
+            <div class="form-field">
+                <label>@T("FieldLabel")</label>
+                <div class="input-with-voice">
+                    <textarea @bind="_additionalContext"
+                              placeholder="@T("FieldPlaceholder")"
+                              rows="3"></textarea>
+                    <VoiceInput OnTranscript="t => _additionalContext = t" />
+                </div>
+            </div>
+
+            <button class="bloom-btn primary" @onclick="GenerateAsync">
+                @T("WriteMessage")
+            </button>
+        </div>
+    }
+
+    <LoadingSkeleton Visible="@_loading" Lines="5" Message="@T("LoadingMessage")" />
+
+    @if (_error != null)
+    {
+        <div class="meal-gentle-note error-note">
+            <p>💗 @_error</p>
+            <button class="bloom-btn secondary small-btn" @onclick="GenerateAsync">@T("TryAgain")</button>
+        </div>
+    }
+
+    @if (_message != null)
+    {
+        <div class="partner-message-card">
+            <p class="message-text">@_message</p>
+            <div class="message-actions">
+                <button class="bloom-btn primary @(_copied ? "copied" : "")" @onclick="CopyAsync">
+                    @(_copied ? T("Copied") : T("CopyMessage"))
+                </button>
+                <button class="bloom-btn secondary" @onclick="Reset">
+                    @T("TryAgain")
+                </button>
+            </div>
+        </div>
+        <p class="partner-note">💗 @T("EditNote")</p>
+    }
+</div>
+
+@code {
+    private string? _message;
+    private string _additionalContext = string.Empty;
+    private bool _loading, _copied;
+    private string? _error;
+    private CancellationTokenSource? _cts;
+    private string _language = "English";
+
+    protected override async Task OnInitializedAsync()
+    {
+        var profile = await ProfileCache.GetAsync();
+        _language = (profile?.Language ?? AppLanguage.English).ToString();
+    }
+
+    private async Task<AgentContext> BuildContextAsync()
+    {
+        var profile = await ProfileCache.GetAsync();
+        var userId = await CurrentUser.GetUserIdAsync();
+        var lastMood = (await Db.MoodCheckIns.AsNoTracking()
+            .Where(m => m.UserId == userId)
+            .OrderByDescending(m => m.CheckedAt)
+            .FirstOrDefaultAsync())?.Mood.ToString();
+        return new AgentContext(
+            profile?.Name ?? "Mama",
+            profile?.CurrentWeek ?? 20,
+            profile?.Language ?? AppLanguage.English,
+            profile?.WorkingWomanMode ?? true,
+            lastMood);
+    }
+
+    private async Task GenerateAsync()
+    {
+        _loading = true;
+        _message = null;
+        _error = null;
+        StateHasChanged();
+
+        _cts?.Cancel();
+        _cts = new CancellationTokenSource();
+
+        try
+        {
+            var context = await BuildContextAsync();
+            _message = await Agents.Partner.GeneratePartnerMessageAsync(
+                string.IsNullOrWhiteSpace(_additionalContext) ? null : _additionalContext,
+                context, _cts.Token);
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception)
+        {
+            _error = T("GenericError");
+        }
+
+        _loading = false;
+    }
+
+    private async Task CopyAsync()
+    {
+        if (_message == null) return;
+        await JS.InvokeVoidAsync("navigator.clipboard.writeText", _message);
+        _copied = true;
+        StateHasChanged();
+        await Task.Delay(2000);
+        _copied = false;
+        StateHasChanged();
+    }
+
+    private void Reset()
+    {
+        _message = null;
+        _additionalContext = string.Empty;
+        _copied = false;
+        _error = null;
+    }
+
+    public void Dispose() => _cts?.Cancel();
+
+    // Small, hand-maintained dictionary rather than a full resx pipeline —
+    // same approach as Recipes.razor / NavMenu.razor. Only the page's own
+    // static UI chrome is translated here; the generated partner message
+    // itself already comes back pre-translated via AgentContext.Language
+    // and is left untouched.
+    private static readonly Dictionary<string, Dictionary<string, string>> Strings = new()
+    {
+        ["English"] = new()
+        {
+            ["Title"] = "Partner Message",
+            ["Subtitle"] = "Sometimes it's hard to find the words. Let Janani help you share what you're going through this week with the people who love you.",
+            ["FieldLabel"] = "Anything specific you'd like to mention? (optional)",
+            ["FieldPlaceholder"] = "e.g. I've been really tired this week, or I need more help with...",
+            ["WriteMessage"] = "Write my message 💌",
+            ["LoadingMessage"] = "Writing something from the heart",
+            ["TryAgain"] = "Try again",
+            ["Copied"] = "Copied ✓",
+            ["CopyMessage"] = "Copy message 📋",
+            ["EditNote"] = "This is your message — edit it any way you'd like before sharing.",
+            ["GenericError"] = "That took a wrong turn — could you try again?",
+        },
+        ["Hindi"] = new()
+        {
+            ["Title"] = "पार्टनर संदेश",
+            ["Subtitle"] = "कभी-कभी सही शब्द ढूंढना मुश्किल होता है। जननी को इस हफ्ते आप जिससे गुज़र रही हैं, उसे उन लोगों के साथ साझा करने में मदद करने दें जो आपसे प्यार करते हैं।",
+            ["FieldLabel"] = "कुछ खास बताना चाहती हैं? (वैकल्पिक)",
+            ["FieldPlaceholder"] = "जैसे: मैं इस हफ्ते बहुत थकी हुई हूं, या मुझे इसमें और मदद चाहिए...",
+            ["WriteMessage"] = "मेरा संदेश लिखें 💌",
+            ["LoadingMessage"] = "दिल से कुछ लिख रहे हैं",
+            ["TryAgain"] = "फिर कोशिश करें",
+            ["Copied"] = "कॉपी हो गया ✓",
+            ["CopyMessage"] = "संदेश कॉपी करें 📋",
+            ["EditNote"] = "यह आपका संदेश है — साझा करने से पहले इसे जैसे चाहें वैसे संपादित करें।",
+            ["GenericError"] = "कुछ गड़बड़ हो गई — क्या आप फिर से कोशिश कर सकती हैं?",
+        },
+        ["Telugu"] = new()
+        {
+            ["Title"] = "భాగస్వామి సందేశం",
+            ["Subtitle"] = "కొన్నిసార్లు సరైన మాటలు దొరకడం కష్టం. ఈ వారం మీరు అనుభవిస్తున్నది మిమ్మల్ని ప్రేమించే వారితో పంచుకోవడంలో జననిని మీకు సహాయం చేయనివ్వండి.",
+            ["FieldLabel"] = "ప్రత్యేకంగా ఏదైనా చెప్పాలనుకుంటున్నారా? (ఐచ్ఛికం)",
+            ["FieldPlaceholder"] = "ఉదా: ఈ వారం నేను చాలా అలసిపోయాను, లేదా నాకు దీనిలో మరింత సహాయం కావాలి...",
+            ["WriteMessage"] = "నా సందేశం రాయండి 💌",
+            ["LoadingMessage"] = "హృదయపూర్వకంగా ఏదో రాస్తున్నాము",
+            ["TryAgain"] = "మళ్ళీ ప్రయత్నించండి",
+            ["Copied"] = "కాపీ చేయబడింది ✓",
+            ["CopyMessage"] = "సందేశం కాపీ చేయండి 📋",
+            ["EditNote"] = "ఇది మీ సందేశం — పంచుకునే ముందు మీకు నచ్చినట్టు దీన్ని సవరించుకోండి.",
+            ["GenericError"] = "ఏదో తప్పు జరిగింది — దయచేసి మళ్ళీ ప్రయత్నించగలరా?",
+        },
+    };
+
+    private string T(string key) =>
+        (Strings.TryGetValue(_language, out var dict) && dict.TryGetValue(key, out var value))
+            ? value
+            : Strings["English"][key];
+}

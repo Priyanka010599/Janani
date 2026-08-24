@@ -1,0 +1,198 @@
+@page "/elder-mode/{ElderId:int}"
+@using Janani.Data
+@using Janani.Models
+@using Janani.Services
+@using Microsoft.EntityFrameworkCore
+@inject AppDbContext Db
+@inject CurrentUserService CurrentUser
+@inject CareAccessService CareAccess
+@inject ElderTutorService Tutor
+@inject IJSRuntime JS
+@rendermode InteractiveServer
+
+<PageTitle>Janani — @(_elder?.Name ?? "Elder Mode")</PageTitle>
+
+<div class="elder-mode">
+    @if (!_loaded)
+    {
+        <p class="em-loading">Loading…</p>
+    }
+    else if (_elder == null)
+    {
+        <div class="em-card">
+            <p>That profile couldn't be found.</p>
+            <a class="em-btn em-btn-secondary" href="/elder-care">← Back</a>
+        </div>
+    }
+    else
+    {
+        <div class="em-topbar">
+            <div class="em-lang-row">
+                <button class="em-lang-btn @(_language == "English" ? "active" : "")" @onclick='() => SetLanguage("English")'>English</button>
+                <button class="em-lang-btn @(_language == "Hindi" ? "active" : "")" @onclick='() => SetLanguage("Hindi")'>हिंदी</button>
+                <button class="em-lang-btn @(_language == "Telugu" ? "active" : "")" @onclick='() => SetLanguage("Telugu")'>తెలుగు</button>
+            </div>
+            <a class="em-exit" href="/elder-care">✕ @T("Exit")</a>
+        </div>
+
+        <h1 class="em-greeting">🌼 @string.Format(T("Greeting"), _elder.Name)</h1>
+        <p class="em-subtitle">@T("Subtitle")</p>
+
+        <div class="em-quick-grid">
+            @foreach (var guide in _guides)
+            {
+                <button class="em-topic-btn" @onclick="() => AskAsync(guide.Title)">@guide.Title</button>
+            }
+        </div>
+
+        <div class="em-ask-card">
+            <label class="em-ask-label">@T("AskLabel")</label>
+            <textarea class="em-ask-input" @bind="_question" placeholder="@T("AskPlaceholder")" rows="2"></textarea>
+            <div class="em-voice-row">
+                <VoiceInput Language="@LanguageEnum" OnTranscript="OnVoiceTranscriptAsync" />
+            </div>
+            <button class="em-btn em-btn-primary" @onclick="() => AskAsync(_question)" disabled="@(_asking || string.IsNullOrWhiteSpace(_question))">
+                @(_asking ? T("Asking") : T("AskButton"))
+            </button>
+        </div>
+
+        @if (_answer != null)
+        {
+            <div class="em-answer-card">
+                <p class="em-answer-text">@_answer</p>
+                <button class="em-btn em-btn-secondary" @onclick="ReadAloudAsync">🔊 @T("ReadAloud")</button>
+            </div>
+        }
+        else if (_askError != null)
+        {
+            <p class="em-error">@_askError</p>
+        }
+    }
+</div>
+
+@code {
+    [Parameter] public int ElderId { get; set; }
+
+    private ElderProfile? _elder;
+    private bool _loaded;
+    private string _language = "English";
+    private List<ElderGuide> _guides = [];
+
+    private string _question = string.Empty;
+    private bool _asking;
+    private string? _answer;
+    private string? _askError;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var userId = await CurrentUser.GetUserIdAsync();
+        var accessibleIds = await CareAccess.GetAccessibleElderIdsAsync(userId);
+        _elder = accessibleIds.Contains(ElderId)
+            ? await Db.ElderProfiles.AsNoTracking().FirstOrDefaultAsync(e => e.Id == ElderId)
+            : null;
+
+        if (_elder != null)
+        {
+            var profile = await Db.UserProfiles.AsNoTracking().FirstOrDefaultAsync(p => p.UserId == userId);
+            _language = (profile?.Language ?? AppLanguage.English).ToString();
+            await LoadGuidesAsync();
+        }
+
+        _loaded = true;
+    }
+
+    private async Task SetLanguage(string language)
+    {
+        _language = language;
+        _answer = null;
+        _askError = null;
+        await LoadGuidesAsync();
+    }
+
+    private async Task LoadGuidesAsync() => _guides = await Tutor.GetGuidesAsync(_language);
+
+    private AppLanguage LanguageEnum => _language switch
+    {
+        "Hindi" => AppLanguage.Hindi,
+        "Telugu" => AppLanguage.Telugu,
+        _ => AppLanguage.English
+    };
+
+    // Speaking a question is the whole point of offering voice here — asking
+    // immediately on transcript, rather than making them also tap "Ask",
+    // is one less step for someone who chose to speak instead of type.
+    private Task OnVoiceTranscriptAsync(string transcript) => AskAsync(transcript);
+
+    private async Task AskAsync(string question)
+    {
+        if (string.IsNullOrWhiteSpace(question)) return;
+        _question = question;
+        _asking = true;
+        _answer = null;
+        _askError = null;
+        StateHasChanged();
+
+        try
+        {
+            _answer = await Tutor.AskAsync(question, _language);
+        }
+        catch (Exception)
+        {
+            _askError = T("AskError");
+        }
+
+        _asking = false;
+    }
+
+    private async Task ReadAloudAsync()
+    {
+        if (_answer == null) return;
+        var speechLang = _language switch { "Hindi" => "hi-IN", "Telugu" => "te-IN", _ => "en-IN" };
+        await JS.InvokeVoidAsync("bloomSpeak.speak", _answer, speechLang);
+    }
+
+    private static readonly Dictionary<string, Dictionary<string, string>> Strings = new()
+    {
+        ["English"] = new()
+        {
+            ["Greeting"] = "Namaste, {0}",
+            ["Subtitle"] = "Tap a question below, or type your own. I'll explain it simply.",
+            ["Exit"] = "Exit",
+            ["AskLabel"] = "Ask me anything",
+            ["AskPlaceholder"] = "e.g. How do I video call my daughter?",
+            ["AskButton"] = "Ask",
+            ["Asking"] = "Thinking...",
+            ["ReadAloud"] = "Read aloud",
+            ["AskError"] = "Something went wrong — please try again.",
+        },
+        ["Hindi"] = new()
+        {
+            ["Greeting"] = "नमस्ते, {0}",
+            ["Subtitle"] = "नीचे कोई सवाल टैप करें, या अपना सवाल लिखें। मैं आपको आसान भाषा में समझाऊंगा।",
+            ["Exit"] = "बाहर जाएं",
+            ["AskLabel"] = "मुझसे कुछ भी पूछें",
+            ["AskPlaceholder"] = "जैसे: मैं अपनी बेटी को वीडियो कॉल कैसे करूं?",
+            ["AskButton"] = "पूछें",
+            ["Asking"] = "सोच रहा हूं...",
+            ["ReadAloud"] = "ज़ोर से पढ़ें",
+            ["AskError"] = "कुछ गड़बड़ हो गई — कृपया फिर से कोशिश करें।",
+        },
+        ["Telugu"] = new()
+        {
+            ["Greeting"] = "నమస్తే, {0}",
+            ["Subtitle"] = "క్రింద ఒక ప్రశ్నను నొక్కండి, లేదా మీ స్వంత ప్రశ్న టైప్ చేయండి. నేను దాన్ని సరళంగా వివరిస్తాను.",
+            ["Exit"] = "నిష్క్రమించు",
+            ["AskLabel"] = "నన్ను ఏదైనా అడగండి",
+            ["AskPlaceholder"] = "ఉదా: నేను నా కూతురికి వీడియో కాల్ ఎలా చేయాలి?",
+            ["AskButton"] = "అడగండి",
+            ["Asking"] = "ఆలోచిస్తోంది...",
+            ["ReadAloud"] = "గట్టిగా చదవండి",
+            ["AskError"] = "ఏదో తప్పు జరిగింది — దయచేసి మళ్లీ ప్రయత్నించండి.",
+        },
+    };
+
+    private string T(string key) =>
+        (Strings.TryGetValue(_language, out var dict) && dict.TryGetValue(key, out var value))
+            ? value
+            : Strings["English"][key];
+}

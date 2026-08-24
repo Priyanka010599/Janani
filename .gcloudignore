@@ -1,0 +1,21 @@
+# Cloud Build source uploads only need what the Dockerfile actually copies
+# (the .NET source + wwwroot) — everything below bloats or hangs the upload.
+.git
+.gitignore
+
+# The Capacitor mobile wrapper project — its own node_modules, downloaded
+# Android SDK, and Gradle distribution are gigabytes and irrelevant to the
+# janani-app container build.
+mobile/
+
+# .NET build output — rebuilt fresh inside the container every time.
+bin/
+obj/
+**/bin/
+**/obj/
+
+# Local dev artifacts.
+*.db
+*.db-shm
+*.db-wal
+.vs/

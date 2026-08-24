@@ -1,0 +1,463 @@
+@page "/medicine"
+@using Janani.Models
+@using Janani.Data
+@using Janani.Services
+@using Microsoft.EntityFrameworkCore
+@inject AppDbContext Db
+@inject IJSRuntime JS
+@inject CurrentUserService CurrentUser
+@inject BloomAgentRegistry Agents
+@rendermode InteractiveServer
+
+<PageTitle>Janani — Medicine & Vitamins</PageTitle>
+
+<div class="bloom-container">
+    <div class="section-header">
+        <h1>💊 @T("Title")</h1>
+        <p class="subtitle">@T("Subtitle")</p>
+    </div>
+
+    @if (_medicines.Any())
+    {
+        <div class="reminder-card">
+            <div class="reminder-summary">
+                <span class="reminder-count">@TakenCount<span class="reminder-total">/@TotalCount</span></span>
+                <span class="reminder-count-label">@T("DosesTakenToday")</span>
+            </div>
+            <button class="bloom-btn primary" @onclick="EnableRemindersAsync">
+                @("🔔 " + (_remindersEnabled ? T("RefreshReminders") : T("EnableReminders")))
+            </button>
+            @if (_reminderStatus == "denied")
+            {
+                <p class="reminder-note">@T("RemindersBlocked")</p>
+            }
+            else if (_reminderStatus == "unsupported")
+            {
+                <p class="reminder-note">@T("RemindersUnsupported")</p>
+            }
+            else if (_remindersEnabled)
+            {
+                <p class="reminder-note">@T("RemindersEnabledNote")</p>
+            }
+        </div>
+
+        <div class="medicine-list">
+            @{ var medIndex = 0; }
+            @foreach (var med in _medicines)
+            {
+                var mIdx = medIndex++;
+                <div class="medicine-card" style="animation-delay: @(mIdx * 0.05)s">
+                    <div class="medicine-header">
+                        <div>
+                            <strong>@med.Name</strong>
+                            @if (!string.IsNullOrWhiteSpace(med.Dosage))
+                            {
+                                <span class="medicine-dosage">@med.Dosage</span>
+                            }
+                        </div>
+                        <button class="icon-btn" title="@(T("Remove") + " " + med.Name)" aria-label="@(T("Remove") + " " + med.Name)" @onclick="() => DeleteMedicineAsync(med)">✕</button>
+                    </div>
+                    <div class="dose-row">
+                        @foreach (var time in med.GetScheduleTimes())
+                        {
+                            var taken = IsTaken(med.Id, time);
+                            var status = GetDoseStatus(time, taken);
+                            <button class="dose-chip @status" @onclick="() => ToggleDoseAsync(med.Id, time)">
+                                <span class="dose-time">@time.ToString("h:mm tt")</span>
+                                <span class="dose-status">@(taken ? T("Taken") : status == "overdue" ? T("Overdue") : status == "due-soon" ? T("DueSoon") : T("UpcomingDose"))</span>
+                            </button>
+                        }
+                    </div>
+                    <div class="medicine-lookup">
+                        @{ _lookupState.TryGetValue(med.Id, out var lookup); }
+                        @if (lookup?.Explanation != null)
+                        {
+                            <p class="medicine-explanation">@lookup.Explanation</p>
+                            <p class="data-source-note">@T("GroundedNote")</p>
+                        }
+                        else if (lookup?.Error != null)
+                        {
+                            <p class="medicine-explanation medicine-explanation-error">@lookup.Error</p>
+                        }
+                        else
+                        {
+                            <button class="bloom-btn secondary small-btn" @onclick="() => LookupMedicineAsync(med)" disabled="@(lookup?.IsLoading == true)">
+                                @(lookup?.IsLoading == true ? T("LookingItUp") : T("WhatsThisFor"))
+                            </button>
+                        }
+                    </div>
+                </div>
+            }
+        </div>
+    }
+    else if (!_adding)
+    {
+        <div class="empty-state">
+            <p>@T("EmptyStateTitle")</p>
+            <p>@T("EmptyStateHint")</p>
+        </div>
+    }
+
+    @if (_adding)
+    {
+        <div class="appointment-form">
+            <h3>@T("AddMedicineHeading")</h3>
+            <div class="form-field">
+                <label>@T("NameLabel")</label>
+                <input @bind="_newName" placeholder="@T("NamePlaceholder")" />
+            </div>
+            <div class="form-field">
+                <label>@T("DosageLabel")</label>
+                <input @bind="_newDosage" placeholder="@T("DosagePlaceholder")" />
+            </div>
+            <div class="form-field">
+                <label>@T("ScheduleTimesLabel")</label>
+                <div class="time-add-row">
+                    <input type="time" @bind="_newTimeInput" />
+                    <button class="bloom-btn secondary small-btn" type="button" @onclick="AddTime">+ @T("AddTimeButton")</button>
+                </div>
+                @if (_newTimes.Any())
+                {
+                    <div class="time-chip-row">
+                        @foreach (var t in _newTimes)
+                        {
+                            <span class="time-chip">
+                                @t.ToString("h:mm tt")
+                                <button type="button" title="@T("RemoveTimeTitle")" @onclick="() => RemoveTime(t)">✕</button>
+                            </span>
+                        }
+                    </div>
+                }
+            </div>
+            <div class="form-actions">
+                <button class="bloom-btn primary" @onclick="SaveMedicineAsync"
+                        disabled="@(string.IsNullOrWhiteSpace(_newName) || !_newTimes.Any())">
+                    @T("SaveButton")
+                </button>
+                <button class="bloom-btn secondary" @onclick="CancelAdding">@T("Cancel")</button>
+            </div>
+        </div>
+    }
+    else
+    {
+        <button class="bloom-btn secondary new-entry-btn" @onclick="() => _adding = true">
+            + @T("AddMedicineHeading")
+        </button>
+    }
+</div>
+
+@code {
+    private List<Medicine> _medicines = [];
+    private List<MedicineDose> _todayDoses = [];
+    private readonly DateOnly _today = DateOnly.FromDateTime(DateTime.Today);
+
+    private bool _adding;
+    private string _newName = string.Empty;
+    private string _newDosage = string.Empty;
+    private TimeOnly? _newTimeInput;
+    private List<TimeOnly> _newTimes = [];
+
+    private bool _remindersEnabled;
+    private string? _reminderStatus;
+    private string _language = "English";
+
+    private class LookupState
+    {
+        public bool IsLoading;
+        public string? Explanation;
+        public string? Error;
+    }
+    private readonly Dictionary<int, LookupState> _lookupState = [];
+
+    private int TotalCount => _medicines.Sum(m => m.GetScheduleTimes().Count);
+    private int TakenCount => _todayDoses.Count(d => d.Taken);
+
+    protected override async Task OnInitializedAsync()
+    {
+        var userId = await CurrentUser.GetUserIdAsync();
+        var profile = await Db.UserProfiles.AsNoTracking().FirstOrDefaultAsync(p => p.UserId == userId);
+        _language = (profile?.Language ?? AppLanguage.English).ToString();
+
+        await LoadMedicinesAsync();
+        await LoadTodayDosesAsync();
+    }
+
+    private async Task LoadMedicinesAsync()
+    {
+        var userId = await CurrentUser.GetUserIdAsync();
+        _medicines = await Db.Medicines.AsNoTracking()
+            .Where(m => m.IsActive && m.UserId == userId)
+            .OrderBy(m => m.Name)
+            .ToListAsync();
+    }
+
+    private async Task LoadTodayDosesAsync()
+    {
+        // MedicineDose has no UserId of its own — ownership is transitive
+        // through Medicine, so scope by the ids from the already-scoped
+        // _medicines list rather than just filtering by date (which used to
+        // return every user's doses for today).
+        var medicineIds = _medicines.Select(m => m.Id).ToList();
+        _todayDoses = await Db.MedicineDoses.AsNoTracking()
+            .Where(d => d.Date == _today && medicineIds.Contains(d.MedicineId))
+            .ToListAsync();
+    }
+
+    private bool IsTaken(int medicineId, TimeOnly time)
+    {
+        var timeStr = time.ToString("HH:mm");
+        return _todayDoses.Any(d => d.MedicineId == medicineId && d.ScheduledTime == timeStr && d.Taken);
+    }
+
+    private string GetDoseStatus(TimeOnly time, bool taken)
+    {
+        if (taken) return "taken";
+        var now = TimeOnly.FromDateTime(DateTime.Now);
+        if (time <= now) return "overdue";
+        if (time <= now.AddMinutes(30)) return "due-soon";
+        return "upcoming";
+    }
+
+    private async Task ToggleDoseAsync(int medicineId, TimeOnly time)
+    {
+        var timeStr = time.ToString("HH:mm");
+        var existing = await Db.MedicineDoses
+            .FirstOrDefaultAsync(d => d.MedicineId == medicineId && d.Date == _today && d.ScheduledTime == timeStr);
+
+        if (existing != null)
+        {
+            existing.Taken = !existing.Taken;
+            // Npgsql rejects non-Utc DateTime.Kind for a timestamptz column
+            // (see Appointments.razor's SaveAppointmentAsync for the same fix).
+            existing.TakenAt = existing.Taken ? DateTime.UtcNow : null;
+        }
+        else
+        {
+            Db.MedicineDoses.Add(new MedicineDose
+            {
+                MedicineId = medicineId,
+                Date = _today,
+                ScheduledTime = timeStr,
+                Taken = true,
+                TakenAt = DateTime.UtcNow
+            });
+        }
+
+        await Db.SaveChangesAsync();
+        await LoadTodayDosesAsync();
+    }
+
+    private void RemoveTime(TimeOnly time) => _newTimes.Remove(time);
+
+    private void AddTime()
+    {
+        if (_newTimeInput.HasValue && !_newTimes.Contains(_newTimeInput.Value))
+        {
+            _newTimes.Add(_newTimeInput.Value);
+            _newTimes = _newTimes.OrderBy(t => t).ToList();
+        }
+        _newTimeInput = null;
+    }
+
+    private async Task SaveMedicineAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_newName) || !_newTimes.Any()) return;
+
+        Db.Medicines.Add(new Medicine
+        {
+            UserId = await CurrentUser.GetUserIdAsync(),
+            Name = _newName.Trim(),
+            Dosage = string.IsNullOrWhiteSpace(_newDosage) ? null : _newDosage.Trim(),
+            ScheduleTimes = string.Join(",", _newTimes.Select(t => t.ToString("HH:mm"))),
+            IsActive = true
+        });
+        await Db.SaveChangesAsync();
+
+        CancelAdding();
+        await LoadMedicinesAsync();
+    }
+
+    private void CancelAdding()
+    {
+        _adding = false;
+        _newName = string.Empty;
+        _newDosage = string.Empty;
+        _newTimeInput = null;
+        _newTimes = [];
+    }
+
+    private async Task LookupMedicineAsync(Medicine med)
+    {
+        if (!_lookupState.TryGetValue(med.Id, out var state))
+        {
+            state = new LookupState();
+            _lookupState[med.Id] = state;
+        }
+        if (state.IsLoading) return;
+
+        state.IsLoading = true;
+        StateHasChanged();
+
+        try
+        {
+            state.Explanation = await Agents.MedicineLookup.LookupAsync(med.Name, med.Dosage);
+        }
+        catch (Exception)
+        {
+            state.Error = T("LookupError");
+        }
+        finally
+        {
+            state.IsLoading = false;
+        }
+    }
+
+    private async Task DeleteMedicineAsync(Medicine medicine)
+    {
+        Db.Medicines.Remove(medicine);
+        await Db.SaveChangesAsync();
+        await LoadMedicinesAsync();
+    }
+
+    private async Task EnableRemindersAsync()
+    {
+        _reminderStatus = await JS.InvokeAsync<string>("bloomReminders.requestPermission");
+        if (_reminderStatus != "granted")
+        {
+            _remindersEnabled = false;
+            return;
+        }
+
+        await JS.InvokeVoidAsync("bloomReminders.clearAll");
+
+        var now = DateTime.Now;
+        foreach (var med in _medicines)
+        {
+            foreach (var time in med.GetScheduleTimes())
+            {
+                if (IsTaken(med.Id, time)) continue;
+
+                var scheduled = _today.ToDateTime(time);
+                if (scheduled <= now) continue;
+
+                var body = string.IsNullOrWhiteSpace(med.Dosage)
+                    ? T("DoseTimeBody")
+                    : $"{med.Dosage} {T("DosageTimeSuffix")}";
+                await JS.InvokeVoidAsync("bloomReminders.schedule", $"💊 {med.Name}", body, (scheduled - now).TotalMilliseconds);
+            }
+        }
+
+        _remindersEnabled = true;
+    }
+
+    private static readonly Dictionary<string, Dictionary<string, string>> Strings = new()
+    {
+        ["English"] = new()
+        {
+            ["Title"] = "Medicine & Vitamins",
+            ["Subtitle"] = "A gentle nudge for your prenatal vitamins and any medicine your care team has you on.",
+            ["DosesTakenToday"] = "doses taken today",
+            ["RefreshReminders"] = "Refresh reminders",
+            ["EnableReminders"] = "Enable reminders",
+            ["RemindersBlocked"] = "Notifications are blocked in your browser settings — you can still use the checklist below.",
+            ["RemindersUnsupported"] = "Your browser doesn't support notifications — the checklist below still works.",
+            ["RemindersEnabledNote"] = "You'll get a notification for each remaining dose today, as long as this tab stays open. 💗",
+            ["Remove"] = "Remove",
+            ["Taken"] = "✓ Taken",
+            ["Overdue"] = "Overdue",
+            ["DueSoon"] = "Due soon",
+            ["UpcomingDose"] = "Upcoming",
+            ["GroundedNote"] = "Grounded in live Google Search — not the model's memory.",
+            ["LookingItUp"] = "Looking it up...",
+            ["WhatsThisFor"] = "ℹ️ What's this for?",
+            ["EmptyStateTitle"] = "No medicines added yet 🌷",
+            ["EmptyStateHint"] = "Add your prenatal vitamin or anything else your care team has you on.",
+            ["AddMedicineHeading"] = "Add a medicine or vitamin",
+            ["NameLabel"] = "Name",
+            ["NamePlaceholder"] = "e.g. Prenatal vitamin, Iron supplement",
+            ["DosageLabel"] = "Dosage (optional)",
+            ["DosagePlaceholder"] = "e.g. 1 tablet, 30mg",
+            ["ScheduleTimesLabel"] = "Schedule times",
+            ["AddTimeButton"] = "Add time",
+            ["RemoveTimeTitle"] = "Remove time",
+            ["SaveButton"] = "Save 💗",
+            ["Cancel"] = "Cancel",
+            ["LookupError"] = "Couldn't look that up right now — try again in a moment.",
+            ["DoseTimeBody"] = "It's time for your dose 💗",
+            ["DosageTimeSuffix"] = "— time to take it 💗",
+        },
+        ["Hindi"] = new()
+        {
+            ["Title"] = "दवाइयां और विटामिन",
+            ["Subtitle"] = "आपके प्रीनेटल विटामिन और आपकी केयर टीम द्वारा दी गई किसी भी दवा के लिए एक हल्की याद दिलाने वाली सूचना।",
+            ["DosesTakenToday"] = "आज ली गई खुराकें",
+            ["RefreshReminders"] = "रिमाइंडर रीफ्रेश करें",
+            ["EnableReminders"] = "रिमाइंडर सक्षम करें",
+            ["RemindersBlocked"] = "आपके ब्राउज़र सेटिंग्स में सूचनाएं ब्लॉक हैं — आप फिर भी नीचे दी गई चेकलिस्ट का उपयोग कर सकती हैं।",
+            ["RemindersUnsupported"] = "आपका ब्राउज़र सूचनाओं का समर्थन नहीं करता — नीचे दी गई चेकलिस्ट फिर भी काम करती है।",
+            ["RemindersEnabledNote"] = "जब तक यह टैब खुला रहेगा, आपको आज की हर बची हुई खुराक के लिए सूचना मिलेगी। 💗",
+            ["Remove"] = "हटाएं",
+            ["Taken"] = "✓ ली गई",
+            ["Overdue"] = "देर हो गई",
+            ["DueSoon"] = "जल्द ही देय",
+            ["UpcomingDose"] = "आगामी",
+            ["GroundedNote"] = "लाइव Google Search पर आधारित — मॉडल की स्मृति पर नहीं।",
+            ["LookingItUp"] = "देखा जा रहा है...",
+            ["WhatsThisFor"] = "ℹ️ यह किस लिए है?",
+            ["EmptyStateTitle"] = "अभी तक कोई दवा नहीं जोड़ी गई 🌷",
+            ["EmptyStateHint"] = "अपना प्रीनेटल विटामिन या आपकी केयर टीम द्वारा दी गई कोई भी अन्य दवा जोड़ें।",
+            ["AddMedicineHeading"] = "दवा या विटामिन जोड़ें",
+            ["NameLabel"] = "नाम",
+            ["NamePlaceholder"] = "जैसे: प्रीनेटल विटामिन, आयरन सप्लीमेंट",
+            ["DosageLabel"] = "खुराक (वैकल्पिक)",
+            ["DosagePlaceholder"] = "जैसे: 1 गोली, 30mg",
+            ["ScheduleTimesLabel"] = "समय अनुसूची",
+            ["AddTimeButton"] = "समय जोड़ें",
+            ["RemoveTimeTitle"] = "समय हटाएं",
+            ["SaveButton"] = "सहेजें 💗",
+            ["Cancel"] = "रद्द करें",
+            ["LookupError"] = "अभी इसे देख नहीं सके — कृपया कुछ देर बाद फिर कोशिश करें।",
+            ["DoseTimeBody"] = "आपकी खुराक का समय हो गया है 💗",
+            ["DosageTimeSuffix"] = "— लेने का समय हो गया 💗",
+        },
+        ["Telugu"] = new()
+        {
+            ["Title"] = "మందులు & విటమిన్లు",
+            ["Subtitle"] = "మీ ప్రినేటల్ విటమిన్లు మరియు మీ కేర్ టీమ్ మీకు సూచించిన ఏ మందు కోసమైనా సున్నితమైన రిమైండర్.",
+            ["DosesTakenToday"] = "ఈరోజు తీసుకున్న మోతాదులు",
+            ["RefreshReminders"] = "రిమైండర్‌లను రిఫ్రెష్ చేయండి",
+            ["EnableReminders"] = "రిమైండర్‌లను ప్రారంభించండి",
+            ["RemindersBlocked"] = "మీ బ్రౌజర్ సెట్టింగ్‌లలో నోటిఫికేషన్‌లు బ్లాక్ చేయబడ్డాయి — మీరు ఇప్పటికీ దిగువ చెక్‌లిస్ట్‌ను ఉపయోగించవచ్చు.",
+            ["RemindersUnsupported"] = "మీ బ్రౌజర్ నోటిఫికేషన్‌లకు మద్దతు ఇవ్వదు — దిగువ చెక్‌లిస్ట్ ఇప్పటికీ పనిచేస్తుంది.",
+            ["RemindersEnabledNote"] = "ఈ ట్యాబ్ తెరిచి ఉన్నంత వరకు, ఈరోజు మిగిలిన ప్రతి మోతాదుకు మీకు నోటిఫికేషన్ వస్తుంది. 💗",
+            ["Remove"] = "తొలగించండి",
+            ["Taken"] = "✓ తీసుకున్నారు",
+            ["Overdue"] = "మించిపోయింది",
+            ["DueSoon"] = "త్వరలో గడువు",
+            ["UpcomingDose"] = "రాబోయేది",
+            ["GroundedNote"] = "లైవ్ Google Searchపై ఆధారపడింది — మోడల్ జ్ఞాపకశక్తిపై కాదు.",
+            ["LookingItUp"] = "వెతుకుతోంది...",
+            ["WhatsThisFor"] = "ℹ️ ఇది దేని కోసం?",
+            ["EmptyStateTitle"] = "ఇంకా మందులు జోడించలేదు 🌷",
+            ["EmptyStateHint"] = "మీ ప్రినేటల్ విటమిన్ లేదా మీ కేర్ టీమ్ మీకు సూచించిన మరేదైనా జోడించండి.",
+            ["AddMedicineHeading"] = "మందు లేదా విటమిన్ జోడించండి",
+            ["NameLabel"] = "పేరు",
+            ["NamePlaceholder"] = "ఉదా: ప్రినేటల్ విటమిన్, ఐరన్ సప్లిమెంట్",
+            ["DosageLabel"] = "మోతాదు (ఐచ్ఛికం)",
+            ["DosagePlaceholder"] = "ఉదా: 1 టాబ్లెట్, 30mg",
+            ["ScheduleTimesLabel"] = "షెడ్యూల్ సమయాలు",
+            ["AddTimeButton"] = "సమయం జోడించండి",
+            ["RemoveTimeTitle"] = "సమయం తొలగించండి",
+            ["SaveButton"] = "సేవ్ చేయండి 💗",
+            ["Cancel"] = "రద్దు చేయండి",
+            ["LookupError"] = "ప్రస్తుతం దాన్ని వెతకలేకపోయాము — దయచేసి కొద్దిసేపటి తర్వాత మళ్లీ ప్రయత్నించండి.",
+            ["DoseTimeBody"] = "మీ మోతాదు సమయం అయింది 💗",
+            ["DosageTimeSuffix"] = "— తీసుకునే సమయం అయింది 💗",
+        },
+    };
+
+    private string T(string key) =>
+        (Strings.TryGetValue(_language, out var dict) && dict.TryGetValue(key, out var value))
+            ? value
+            : Strings["English"][key];
+}

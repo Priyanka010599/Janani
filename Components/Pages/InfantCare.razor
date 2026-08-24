@@ -1,0 +1,851 @@
+@page "/infant-care"
+@using Janani.Models
+@using Janani.Data
+@using Janani.Services
+@using Microsoft.EntityFrameworkCore
+@inject AppDbContext Db
+@inject CurrentUserService CurrentUser
+@inject BloomAgentRegistry Agents
+@inject UserProfileCache ProfileCache
+@inject PushNotificationService PushNotifications
+@inject IEmailNotificationService EmailNotifications
+@inject CareAccessService CareAccess
+@implements IDisposable
+@rendermode InteractiveServer
+
+<PageTitle>Janani — Infant Care</PageTitle>
+
+<div class="bloom-container">
+    <div class="section-header">
+        <h1>👶 @T("Title")</h1>
+        <p class="subtitle">@T("Subtitle")</p>
+    </div>
+
+    @if (_infants.Any())
+    {
+        <div class="feeling-grid">
+            @foreach (var infant in _infants)
+            {
+                <button class="feeling-btn @(_selectedInfant?.Id == infant.Id ? "selected" : "")" @onclick="() => SelectInfantAsync(infant)">
+                    <span>👶</span>
+                    <span class="feeling-label">@infant.Name</span>
+                </button>
+            }
+        </div>
+    }
+    else if (!_addingInfant)
+    {
+        <div class="empty-state">
+            <p>@T("EmptyTitle")</p>
+            <p>@T("EmptyHint")</p>
+        </div>
+    }
+
+    @if (_addingInfant)
+    {
+        <div class="appointment-form">
+            <h3>@T("AddHeading")</h3>
+            <div class="form-row">
+                <div class="form-field">
+                    <label>@T("NameLabel")</label>
+                    <input @bind="_newName" placeholder="@T("NamePlaceholder")" />
+                </div>
+                <div class="form-field">
+                    <label>@T("DobLabel")</label>
+                    <input type="date" @bind="_newDateOfBirth" />
+                </div>
+            </div>
+            <div class="form-actions">
+                <button class="bloom-btn primary" @onclick="SaveInfantAsync" disabled="@string.IsNullOrWhiteSpace(_newName)">
+                    @T("SaveHeart")
+                </button>
+                <button class="bloom-btn secondary" @onclick="() => _addingInfant = false">@T("Cancel")</button>
+            </div>
+        </div>
+    }
+    else
+    {
+        <button class="bloom-btn secondary new-entry-btn" @onclick="() => _addingInfant = true">
+            @T("AddBabyBtn")
+        </button>
+    }
+
+    @if (_selectedInfant != null)
+    {
+        <div class="daily-plan">
+            <div class="plan-header">
+                <span class="week-badge">@_selectedInfant.AgeInWeeks @T("WeeksOld")</span>
+                <h2>@string.Format(T("CaringFor"), _selectedInfant.Name)</h2>
+                <a class="bloom-btn secondary small-btn" href="@($"/emergency?about=infant-{_selectedInfant.Id}")">🆘 @T("GetHelpBtn")</a>
+                <a class="bloom-btn secondary small-btn" href="@($"/infant-care/export/{_selectedInfant.Id}")">🖨️ @T("ExportBtn")</a>
+            </div>
+
+            @if (_activeAlert != null)
+            {
+                <div class="sos-safety-note">
+                    <p>@(_activeAlert.Severity == AlertSeverity.Critical ? "🚨" : "⚠️") @_activeAlert.Message</p>
+                    <a class="bloom-btn primary small-btn" href="@($"/emergency?about=infant-{_selectedInfant.Id}")">🆘 @T("SendSosBtn")</a>
+                    <button class="bloom-btn secondary small-btn" @onclick="AcknowledgeAlertAsync">@T("SeenThisBtn")</button>
+                </div>
+            }
+
+            <div class="plan-card">
+                <h3>🩺 @T("DoctorSectionTitle")</h3>
+                <p class="sos-hint">@T("DoctorSectionHint")</p>
+                <div class="form-row">
+                    <input @bind="_doctorNameInput" placeholder="@T("DoctorNamePlaceholder")" />
+                    <input @bind="_doctorEmailInput" placeholder="@T("DoctorEmailPlaceholder")" type="email" />
+                </div>
+                <button class="bloom-btn secondary small-btn" @onclick="SaveDoctorContactAsync">@T("Save")</button>
+                @if (_doctorSaved) { <span class="sos-hint">✅ @T("Saved")</span> }
+            </div>
+
+            @if (_selectedInfant.UserId == _currentUserId)
+            {
+                <div class="plan-card">
+                    <h3>👨‍👩‍👧 @T("ShareSectionTitle")</h3>
+                    <p class="sos-hint">@string.Format(T("ShareHint"), _selectedInfant.Name)</p>
+                    @if (_shares.Count > 0)
+                    {
+                        <div class="contact-list">
+                            @foreach (var share in _shares)
+                            {
+                                <div class="contact-card">
+                                    <div class="contact-info">
+                                        <strong>@share.Username</strong>
+                                        <span class="contact-relation">@string.Format(T("SharedPrefix"), share.GrantedAt.ToLocalTime().ToString("dd MMM yyyy"))</span>
+                                    </div>
+                                    <button class="icon-btn" title="@T("RevokeTitle")" aria-label="@string.Format(T("RevokeAriaTemplate"), share.Username)" @onclick="() => RevokeShareAsync(share.ShareId)">✕</button>
+                                </div>
+                            }
+                        </div>
+                    }
+                    <div class="form-row">
+                        <input @bind="_shareUsernameInput" placeholder="@T("UsernamePlaceholder")" />
+                    </div>
+                    <button class="bloom-btn secondary small-btn" @onclick="ShareInfantAsync">@T("ShareAccessBtn")</button>
+                    @if (_shareError != null) { <p class="sos-hint">💗 @_shareError</p> }
+                </div>
+            }
+
+            <div class="form-row">
+                <button class="bloom-btn secondary small-btn" @onclick="() => LogFeedingAsync(FeedingType.Breastfeeding)">🤱 @T("FedBreastBtn")</button>
+                <button class="bloom-btn secondary small-btn" @onclick="() => LogFeedingAsync(FeedingType.Formula)">🍼 @T("FedFormulaBtn")</button>
+                <button class="bloom-btn secondary small-btn" @onclick="() => LogFeedingAsync(FeedingType.Solid)">🥄 @T("FedSolidBtn")</button>
+            </div>
+
+            @if (_lastFeeding != null)
+            {
+                <p class="sos-hint">@string.Format(T("LastFeedingTemplate"), FeedingTypeLabel(_lastFeeding.Type)) — @FormatAgo(_lastFeeding.FedAt)</p>
+            }
+
+            <div class="form-field">
+                <label>@T("LogGrowthLabel")</label>
+                <div class="form-row">
+                    <input type="number" step="0.01" @bind="_growthWeightKg" placeholder="@T("WeightPlaceholder")" />
+                    <input type="number" step="0.1" @bind="_growthHeightCm" placeholder="@T("HeightPlaceholder")" />
+                    <input type="number" step="0.1" @bind="_growthHeadCm" placeholder="@T("HeadCircPlaceholder")" />
+                </div>
+                <button class="bloom-btn secondary small-btn" @onclick="SaveGrowthAsync">@T("LogGrowthBtn")</button>
+                <button class="bloom-btn secondary small-btn" @onclick="SimulateDeviceSyncAsync" title="@T("SimulateSyncTitle")">
+                    🔗 @T("SimulateSyncBtn")
+                </button>
+            </div>
+
+            @if (_lastGrowthEntry != null)
+            {
+                <p class="sos-hint">@string.Format(T("LastWeightTemplate"), _lastGrowthEntry.WeightKg) — @(string.IsNullOrEmpty(_lastGrowthEntry.Source) ? T("LoggedManuallyLower") : string.Format(T("SyncedFromTemplateLower"), _lastGrowthEntry.Source))</p>
+            }
+
+            @if (_weightTrend.Count >= 2)
+            {
+                <div class="plan-card">
+                    <h3>📈 @T("WeightTrendTitle")</h3>
+                    <TrendChart Values="_weightTrend" Unit=" kg" Color="var(--water-deep)" />
+                </div>
+            }
+
+            <RecommendedReading Topic="@(_selectedInfant.AgeInWeeks < 12 ? "newborn-care" : "infant-sleep")" />
+
+            <div class="plan-card">
+                <h3>💉 @T("VaccinationsTitle")</h3>
+                <div class="contact-list">
+                    @foreach (var v in _vaccineStatuses)
+                    {
+                        <div class="contact-card @StatusCardClass(v.Status)">
+                            <div class="contact-info">
+                                <strong>@v.Vaccine.Name</strong>
+                                <span class="contact-relation">@string.Format(T("DueTemplate"), v.Vaccine.AgeLabel)</span>
+                            </div>
+                            @if (v.Status == VaccinationStatus.Given)
+                            {
+                                <div class="contact-actions">
+                                    <span class="family-status">✅ @string.Format(T("GivenOnTemplate"), v.GivenAt?.ToString("MMM d, yyyy"))</span>
+                                    <button class="icon-btn" title="@T("UndoTitle")" aria-label="@string.Format(T("UndoAriaTemplate"), v.Vaccine.Name)" @onclick="() => UndoVaccineAsync(v.Vaccine)">↺</button>
+                                </div>
+                            }
+                            else
+                            {
+                                <div class="contact-actions">
+                                    <span class="family-status @(v.Status == VaccinationStatus.Overdue ? "alert" : "")">@StatusLabel(v.Status)</span>
+                                    <button class="bloom-btn secondary small-btn" @onclick="() => MarkVaccineGivenAsync(v.Vaccine)">@T("MarkGivenBtn")</button>
+                                </div>
+                            }
+                        </div>
+                    }
+                </div>
+            </div>
+
+            @if (_plan == null)
+            {
+                <div class="note-section">
+                    <label>@T("StatusTodayLabel")</label>
+                    <textarea @bind="_statusDescription" placeholder="@T("StatusPlaceholderInfant")" rows="2"></textarea>
+                </div>
+
+                <button class="bloom-btn primary" @onclick="GeneratePlanAsync"
+                        disabled="@(string.IsNullOrWhiteSpace(_statusDescription) || _generating)">
+                    @if (_generating) { <span>@T("CreatingPlan")</span> } else { <span>@T("GetGuidance")</span> }
+                </button>
+
+                @if (_error != null)
+                {
+                    <div class="meal-gentle-note error-note">
+                        <p>💗 @_error</p>
+                        <button class="bloom-btn secondary small-btn" @onclick="GeneratePlanAsync">@T("TryAgain")</button>
+                    </div>
+                }
+            }
+            else
+            {
+                <div class="plan-card acknowledgment">
+                    <p>@_plan.Acknowledgment</p>
+                </div>
+
+                <div class="plan-section">
+                    <h3>💧 @T("TodaysSmallSteps")</h3>
+                    <ul class="suggestion-list">
+                        @foreach (var s in _plan.Suggestions)
+                        {
+                            <li>@s</li>
+                        }
+                    </ul>
+                </div>
+
+                <div class="plan-card week-note">
+                    <h3>🌱 @T("AtThisAge")</h3>
+                    <p>@_plan.MilestoneNote</p>
+                </div>
+
+                <div class="plan-card calming">
+                    <h3>📝 @T("ForYou")</h3>
+                    <p>@_plan.CaregiverNote</p>
+                </div>
+
+                <button class="bloom-btn secondary checkin-again-btn" @onclick="() => _plan = null">
+                    @T("CheckInAgain")
+                </button>
+            }
+        </div>
+    }
+</div>
+
+@code {
+    private List<InfantProfile> _infants = [];
+    private InfantProfile? _selectedInfant;
+    private FeedingLog? _lastFeeding;
+    private InfantAlert? _activeAlert;
+    private bool _addingInfant;
+    private string _newName = string.Empty;
+    private DateOnly _newDateOfBirth = DateOnly.FromDateTime(DateTime.Today);
+    private string _doctorNameInput = string.Empty;
+    private string _doctorEmailInput = string.Empty;
+    private bool _doctorSaved;
+    private List<ShareInfo> _shares = [];
+    private string _shareUsernameInput = string.Empty;
+    private string? _shareError;
+
+    private decimal? _growthWeightKg;
+    private decimal? _growthHeightCm;
+    private decimal? _growthHeadCm;
+    private List<decimal> _weightTrend = [];
+    private GrowthEntry? _lastGrowthEntry;
+
+    private string _statusDescription = string.Empty;
+    private InfantDailyPlan? _plan;
+    private bool _generating;
+    private string? _error;
+    private CancellationTokenSource? _cts;
+
+    private List<VaccinationSchedule.VaccineWithStatus> _vaccineStatuses = [];
+
+    private int _currentUserId;
+    private string _language = "English";
+
+    protected override async Task OnInitializedAsync()
+    {
+        _currentUserId = await CurrentUser.GetUserIdAsync();
+        var profile = await ProfileCache.GetAsync();
+        _language = (profile?.Language ?? AppLanguage.English).ToString();
+        await LoadInfantsAsync();
+    }
+
+    private async Task LoadInfantsAsync()
+    {
+        var userId = await CurrentUser.GetUserIdAsync();
+        var accessibleIds = await CareAccess.GetAccessibleInfantIdsAsync(userId);
+        _infants = await Db.InfantProfiles.AsNoTracking()
+            .Where(i => accessibleIds.Contains(i.Id))
+            .OrderBy(i => i.Name)
+            .ToListAsync();
+    }
+
+    private async Task SaveInfantAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_newName)) return;
+
+        Db.InfantProfiles.Add(new InfantProfile
+        {
+            UserId = await CurrentUser.GetUserIdAsync(),
+            Name = _newName.Trim(),
+            DateOfBirth = _newDateOfBirth
+        });
+        await Db.SaveChangesAsync();
+
+        _newName = string.Empty;
+        _newDateOfBirth = DateOnly.FromDateTime(DateTime.Today);
+        _addingInfant = false;
+        await LoadInfantsAsync();
+    }
+
+    private async Task SelectInfantAsync(InfantProfile infant)
+    {
+        _selectedInfant = infant;
+        _plan = null;
+        _statusDescription = string.Empty;
+        _doctorNameInput = infant.DoctorName ?? string.Empty;
+        _doctorEmailInput = infant.DoctorEmail ?? string.Empty;
+        _doctorSaved = false;
+        _lastFeeding = await Db.FeedingLogs.AsNoTracking()
+            .Where(f => f.InfantProfileId == infant.Id)
+            .OrderByDescending(f => f.FedAt)
+            .FirstOrDefaultAsync();
+        _activeAlert = await Db.InfantAlerts.AsNoTracking()
+            .Where(a => a.InfantProfileId == infant.Id && !a.Acknowledged)
+            .OrderByDescending(a => a.TriggeredAt)
+            .FirstOrDefaultAsync();
+        await LoadVaccinationStatusAsync();
+        await LoadWeightTrendAsync();
+
+        _shareUsernameInput = string.Empty;
+        _shareError = null;
+        _shares = infant.UserId == _currentUserId
+            ? await CareAccess.GetSharesForInfantAsync(infant.Id)
+            : [];
+    }
+
+    private async Task ShareInfantAsync()
+    {
+        if (_selectedInfant == null || string.IsNullOrWhiteSpace(_shareUsernameInput)) return;
+        _shareError = await CareAccess.GrantInfantAccessAsync(_selectedInfant.Id, _shareUsernameInput, _currentUserId);
+        if (_shareError == null)
+        {
+            _shareUsernameInput = string.Empty;
+            _shares = await CareAccess.GetSharesForInfantAsync(_selectedInfant.Id);
+        }
+    }
+
+    private async Task RevokeShareAsync(int shareId)
+    {
+        if (_selectedInfant == null) return;
+        await CareAccess.RevokeAsync(shareId, _currentUserId);
+        _shares = await CareAccess.GetSharesForInfantAsync(_selectedInfant.Id);
+    }
+
+    private async Task LoadWeightTrendAsync()
+    {
+        if (_selectedInfant == null) return;
+        var recentEntries = await Db.GrowthEntries.AsNoTracking()
+            .Where(g => g.InfantProfileId == _selectedInfant.Id && g.WeightKg != null)
+            .OrderByDescending(g => g.RecordedAt)
+            .Take(10)
+            .ToListAsync();
+        _lastGrowthEntry = recentEntries.FirstOrDefault();
+        recentEntries.Reverse();
+        _weightTrend = recentEntries.Select(g => g.WeightKg!.Value).ToList();
+    }
+
+    private async Task SaveDoctorContactAsync()
+    {
+        if (_selectedInfant == null) return;
+        var name = string.IsNullOrWhiteSpace(_doctorNameInput) ? null : _doctorNameInput.Trim();
+        var email = string.IsNullOrWhiteSpace(_doctorEmailInput) ? null : _doctorEmailInput.Trim();
+
+        await Db.InfantProfiles.Where(i => i.Id == _selectedInfant.Id)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(i => i.DoctorName, name)
+                .SetProperty(i => i.DoctorEmail, email));
+
+        _selectedInfant.DoctorName = name;
+        _selectedInfant.DoctorEmail = email;
+        _doctorSaved = true;
+    }
+
+    private async Task AcknowledgeAlertAsync()
+    {
+        if (_activeAlert == null) return;
+        var alert = await Db.InfantAlerts.FindAsync(_activeAlert.Id);
+        if (alert != null)
+        {
+            alert.Acknowledged = true;
+            await Db.SaveChangesAsync();
+        }
+        _activeAlert = null;
+    }
+
+    private async Task LoadVaccinationStatusAsync()
+    {
+        if (_selectedInfant == null) return;
+
+        var given = await Db.VaccinationRecords.AsNoTracking()
+            .Where(v => v.InfantProfileId == _selectedInfant.Id)
+            .ToListAsync();
+        _vaccineStatuses = VaccinationSchedule.BuildStatus(_selectedInfant.AgeInWeeks, given)
+            .OrderBy(v => v.Status switch
+            {
+                VaccinationStatus.Overdue => 0,
+                VaccinationStatus.DueNow => 1,
+                VaccinationStatus.Upcoming => 2,
+                _ => 3
+            })
+            .ToList();
+    }
+
+    private async Task MarkVaccineGivenAsync(VaccinationSchedule.ScheduledVaccine vaccine)
+    {
+        if (_selectedInfant == null) return;
+
+        Db.VaccinationRecords.Add(new VaccinationRecord
+        {
+            InfantProfileId = _selectedInfant.Id,
+            VaccineName = vaccine.Name
+        });
+        await Db.SaveChangesAsync();
+        await LoadVaccinationStatusAsync();
+    }
+
+    private async Task UndoVaccineAsync(VaccinationSchedule.ScheduledVaccine vaccine)
+    {
+        if (_selectedInfant == null) return;
+
+        var record = await Db.VaccinationRecords
+            .Where(v => v.InfantProfileId == _selectedInfant.Id && v.VaccineName == vaccine.Name)
+            .FirstOrDefaultAsync();
+        if (record == null) return;
+
+        Db.VaccinationRecords.Remove(record);
+        await Db.SaveChangesAsync();
+        await LoadVaccinationStatusAsync();
+    }
+
+    private static string StatusCardClass(VaccinationStatus status) => status switch
+    {
+        VaccinationStatus.Overdue => "is-alert-critical",
+        VaccinationStatus.DueNow => "is-alert-warning",
+        _ => ""
+    };
+
+    private string StatusLabel(VaccinationStatus status) => status switch
+    {
+        VaccinationStatus.Overdue => $"🚨 {T("OverdueLabel")}",
+        VaccinationStatus.DueNow => $"⚠️ {T("DueNowLabel")}",
+        _ => T("UpcomingLabel")
+    };
+
+    private string FeedingTypeLabel(FeedingType type) => type switch
+    {
+        FeedingType.Breastfeeding => T("Breastfeeding"),
+        FeedingType.Formula => T("Formula"),
+        FeedingType.Solid => T("Solid"),
+        _ => type.ToString()
+    };
+
+    private async Task LogFeedingAsync(FeedingType type)
+    {
+        if (_selectedInfant == null) return;
+
+        var log = new FeedingLog { InfantProfileId = _selectedInfant.Id, Type = type };
+        Db.FeedingLogs.Add(log);
+        await Db.SaveChangesAsync();
+        _lastFeeding = log;
+    }
+
+    private async Task SaveGrowthAsync()
+    {
+        if (_selectedInfant == null) return;
+
+        var entry = new GrowthEntry
+        {
+            InfantProfileId = _selectedInfant.Id,
+            WeightKg = _growthWeightKg,
+            HeightCm = _growthHeightCm,
+            HeadCircumferenceCm = _growthHeadCm
+        };
+
+        _growthWeightKg = null;
+        _growthHeightCm = null;
+        _growthHeadCm = null;
+
+        await ProcessGrowthEntryAsync(entry);
+    }
+
+    // Stands in for a real device-cloud sync (e.g. a Withings smart scale)
+    // until one is wired up — see ElderCare.razor's SimulateDeviceSyncAsync
+    // for the same pattern on the vitals side.
+    private static readonly Random _deviceRandom = new();
+
+    private async Task SimulateDeviceSyncAsync()
+    {
+        if (_selectedInfant == null) return;
+
+        var previousWeight = await Db.GrowthEntries.AsNoTracking()
+            .Where(g => g.InfantProfileId == _selectedInfant.Id && g.WeightKg != null)
+            .OrderByDescending(g => g.RecordedAt)
+            .Select(g => g.WeightKg)
+            .FirstOrDefaultAsync();
+
+        // Small plausible step up from the last known weight (or a
+        // reasonable default for this age if there's no history yet),
+        // occasionally flat/down to demonstrate the stalled-growth check.
+        var baseline = previousWeight ?? (3.3m + (decimal)_selectedInfant.AgeInWeeks * 0.15m);
+        var delta = _deviceRandom.NextDouble() < 0.2 ? (decimal)(_deviceRandom.NextDouble() * 0.1 - 0.05) : (decimal)(_deviceRandom.NextDouble() * 0.25 + 0.05);
+        var entry = new GrowthEntry
+        {
+            InfantProfileId = _selectedInfant.Id,
+            WeightKg = Math.Round(baseline + delta, 2),
+            Source = "Withings Body smart scale (simulated)"
+        };
+
+        await ProcessGrowthEntryAsync(entry);
+    }
+
+    private async Task ProcessGrowthEntryAsync(GrowthEntry entry)
+    {
+        if (_selectedInfant == null) return;
+
+        var previous = await Db.GrowthEntries.AsNoTracking()
+            .Where(g => g.InfantProfileId == _selectedInfant.Id)
+            .OrderByDescending(g => g.RecordedAt)
+            .FirstOrDefaultAsync();
+
+        Db.GrowthEntries.Add(entry);
+        await Db.SaveChangesAsync();
+        await LoadWeightTrendAsync();
+
+        // Deterministic check, no LLM involved — see GrowthThresholdChecker.
+        var concerns = GrowthThresholdChecker.Check(_selectedInfant, entry, previous);
+        if (concerns.Count > 0)
+        {
+            var alert = new InfantAlert
+            {
+                InfantProfileId = _selectedInfant.Id,
+                GrowthEntryId = entry.Id,
+                Severity = concerns.Any(c => c.Severity == AlertSeverity.Critical) ? AlertSeverity.Critical : AlertSeverity.Warning,
+                Message = string.Join(" ", concerns.Select(c => c.Description))
+            };
+            Db.InfantAlerts.Add(alert);
+            await Db.SaveChangesAsync();
+            _activeAlert = alert;
+
+            var prefix = alert.Severity == AlertSeverity.Critical ? "🚨" : "⚠️";
+
+            // Every caregiver with access gets pushed, not just whoever was
+            // logging the entry — see ElderCare.razor's NotifyElderAlertAsync.
+            var caregiverIds = await CareAccess.GetCaregiverUserIdsForInfantAsync(_selectedInfant.Id);
+            foreach (var caregiverId in caregiverIds)
+            {
+                await PushNotifications.NotifyUserAsync(caregiverId, $"{prefix} {_selectedInfant.Name} — growth concern", alert.Message);
+            }
+
+            // Only Critical escalates to the doctor by email, sent once via
+            // whichever caregiver has Gmail connected.
+            if (alert.Severity == AlertSeverity.Critical && !string.IsNullOrWhiteSpace(_selectedInfant.DoctorEmail))
+            {
+                var subject = $"Urgent: {_selectedInfant.Name} may need attention (via Janani)";
+                var body = $"{alert.Message}\n\nThis is an automated alert from Janani, a family caregiving app, " +
+                           $"sent on behalf of {_selectedInfant.Name}'s caregiver because a critical concern was flagged.";
+                foreach (var caregiverId in caregiverIds)
+                {
+                    if (await EmailNotifications.SendDoctorAlertAsync(caregiverId, _selectedInfant.DoctorEmail!, _selectedInfant.DoctorName ?? "Doctor", subject, body))
+                        break;
+                }
+            }
+        }
+    }
+
+    private async Task GeneratePlanAsync()
+    {
+        if (_selectedInfant == null || string.IsNullOrWhiteSpace(_statusDescription)) return;
+        _generating = true;
+        _error = null;
+        StateHasChanged();
+
+        _cts?.Cancel();
+        _cts = new CancellationTokenSource();
+
+        try
+        {
+            var activitySummary = _lastFeeding != null
+                ? $"Last fed ({_lastFeeding.Type}) {FormatAgo(_lastFeeding.FedAt)}"
+                : null;
+            var language = (await ProfileCache.GetAsync())?.Language ?? AppLanguage.English;
+            _plan = await Agents.InfantCare.GenerateDailyPlanAsync(
+                _selectedInfant, _statusDescription, activitySummary, language, _cts.Token);
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception)
+        {
+            _error = T("GenericRetryError");
+        }
+
+        _generating = false;
+    }
+
+    private string FormatAgo(DateTime at)
+    {
+        var span = DateTime.UtcNow - at;
+        if (span.TotalMinutes < 60) return $"{(int)span.TotalMinutes}{T("MinAgo")}";
+        if (span.TotalHours < 24) return $"{(int)span.TotalHours}{T("HourAgo")}";
+        return $"{(int)span.TotalDays}{T("DayAgo")}";
+    }
+
+    public void Dispose() => _cts?.Cancel();
+
+    private static readonly Dictionary<string, Dictionary<string, string>> Strings = new()
+    {
+        ["English"] = new()
+        {
+            ["Title"] = "Infant Care",
+            ["Subtitle"] = "Log feeding and sleep, track growth, and get a gentle daily plan.",
+            ["EmptyTitle"] = "No one added yet 🌷",
+            ["EmptyHint"] = "Add your baby to start tracking.",
+            ["AddHeading"] = "Add your baby",
+            ["NameLabel"] = "Name",
+            ["NamePlaceholder"] = "Baby's name",
+            ["DobLabel"] = "Date of birth",
+            ["SaveHeart"] = "Save 💗",
+            ["Cancel"] = "Cancel",
+            ["AddBabyBtn"] = "+ Add your baby",
+            ["WeeksOld"] = "weeks old",
+            ["CaringFor"] = "Caring for {0}",
+            ["GetHelpBtn"] = "Get help",
+            ["ExportBtn"] = "Export for doctor visit",
+            ["SendSosBtn"] = "Send SOS about this",
+            ["SeenThisBtn"] = "I've seen this",
+            ["DoctorSectionTitle"] = "Doctor for critical alerts",
+            ["DoctorSectionHint"] = "If something Critical is flagged, Janani can automatically email this doctor (needs Gmail connected in Settings).",
+            ["DoctorNamePlaceholder"] = "Doctor's name",
+            ["DoctorEmailPlaceholder"] = "Doctor's email",
+            ["Save"] = "Save",
+            ["Saved"] = "Saved",
+            ["ShareSectionTitle"] = "Share with another caregiver",
+            ["ShareHint"] = "Give another Janani account full access to {0} — feeding, growth, vaccinations, everything you see.",
+            ["SharedPrefix"] = "Shared {0}",
+            ["RevokeTitle"] = "Revoke access",
+            ["RevokeAriaTemplate"] = "Revoke {0}'s access",
+            ["UsernamePlaceholder"] = "Their Janani username",
+            ["ShareAccessBtn"] = "Share access",
+            ["FedBreastBtn"] = "Fed (breast)",
+            ["FedFormulaBtn"] = "Fed (formula)",
+            ["FedSolidBtn"] = "Fed (solid)",
+            ["LastFeedingTemplate"] = "Last feeding: {0}",
+            ["Breastfeeding"] = "Breastfeeding",
+            ["Formula"] = "Formula",
+            ["Solid"] = "Solid",
+            ["LogGrowthLabel"] = "Log growth (optional)",
+            ["WeightPlaceholder"] = "Weight (kg)",
+            ["HeightPlaceholder"] = "Height (cm)",
+            ["HeadCircPlaceholder"] = "Head circumference (cm)",
+            ["LogGrowthBtn"] = "Log growth",
+            ["SimulateSyncBtn"] = "Simulate device sync",
+            ["SimulateSyncTitle"] = "Stands in for a real connected smart scale until one is wired up",
+            ["LastWeightTemplate"] = "Last weight: {0} kg",
+            ["LoggedManuallyLower"] = "logged manually",
+            ["SyncedFromTemplateLower"] = "synced from {0}",
+            ["WeightTrendTitle"] = "Weight trend",
+            ["VaccinationsTitle"] = "Vaccinations",
+            ["DueTemplate"] = "Due {0}",
+            ["GivenOnTemplate"] = "Given {0}",
+            ["UndoTitle"] = "Undo",
+            ["UndoAriaTemplate"] = "Undo marking {0} as given",
+            ["OverdueLabel"] = "Overdue",
+            ["DueNowLabel"] = "Due now",
+            ["UpcomingLabel"] = "Upcoming",
+            ["MarkGivenBtn"] = "Mark given",
+            ["StatusTodayLabel"] = "How's it going today?",
+            ["StatusPlaceholderInfant"] = "e.g. feeding well but not sleeping much, fussy this afternoon, great day",
+            ["CreatingPlan"] = "Creating your plan... 💗",
+            ["GetGuidance"] = "Get today's guidance 🌸",
+            ["TryAgain"] = "Try again",
+            ["TodaysSmallSteps"] = "Today's small steps",
+            ["AtThisAge"] = "At this age",
+            ["ForYou"] = "For you",
+            ["CheckInAgain"] = "Check in again",
+            ["MinAgo"] = " min ago",
+            ["HourAgo"] = "h ago",
+            ["DayAgo"] = "d ago",
+            ["GenericRetryError"] = "That took a wrong turn — could you try again?",
+        },
+        ["Hindi"] = new()
+        {
+            ["Title"] = "शिशु देखभाल",
+            ["Subtitle"] = "भोजन और नींद दर्ज करें, विकास को ट्रैक करें, और एक सौम्य दैनिक योजना पाएं।",
+            ["EmptyTitle"] = "अभी तक कोई नहीं जोड़ा गया 🌷",
+            ["EmptyHint"] = "ट्रैकिंग शुरू करने के लिए अपने बच्चे को जोड़ें।",
+            ["AddHeading"] = "अपने बच्चे को जोड़ें",
+            ["NameLabel"] = "नाम",
+            ["NamePlaceholder"] = "बच्चे का नाम",
+            ["DobLabel"] = "जन्म तिथि",
+            ["SaveHeart"] = "सहेजें 💗",
+            ["Cancel"] = "रद्द करें",
+            ["AddBabyBtn"] = "+ अपने बच्चे को जोड़ें",
+            ["WeeksOld"] = "सप्ताह की उम्र",
+            ["CaringFor"] = "{0} की देखभाल",
+            ["GetHelpBtn"] = "मदद पाएं",
+            ["ExportBtn"] = "डॉक्टर विज़िट के लिए एक्सपोर्ट करें",
+            ["SendSosBtn"] = "इसके बारे में SOS भेजें",
+            ["SeenThisBtn"] = "मैंने इसे देख लिया है",
+            ["DoctorSectionTitle"] = "गंभीर अलर्ट के लिए डॉक्टर",
+            ["DoctorSectionHint"] = "यदि कुछ गंभीर के रूप में चिह्नित होता है, तो जनानी अपने आप इस डॉक्टर को ईमेल कर सकती है (सेटिंग्स में Gmail कनेक्ट होना ज़रूरी है)।",
+            ["DoctorNamePlaceholder"] = "डॉक्टर का नाम",
+            ["DoctorEmailPlaceholder"] = "डॉक्टर का ईमेल",
+            ["Save"] = "सहेजें",
+            ["Saved"] = "सहेजा गया",
+            ["ShareSectionTitle"] = "किसी अन्य देखभालकर्ता के साथ साझा करें",
+            ["ShareHint"] = "किसी अन्य जनानी खाते को {0} तक पूरी पहुंच दें — भोजन, विकास, टीकाकरण, जो कुछ भी आप देखते हैं।",
+            ["SharedPrefix"] = "साझा किया गया {0}",
+            ["RevokeTitle"] = "पहुंच रद्द करें",
+            ["RevokeAriaTemplate"] = "{0} की पहुंच रद्द करें",
+            ["UsernamePlaceholder"] = "उनका जनानी उपयोगकर्ता नाम",
+            ["ShareAccessBtn"] = "पहुंच साझा करें",
+            ["FedBreastBtn"] = "स्तनपान कराया",
+            ["FedFormulaBtn"] = "फॉर्मूला दिया",
+            ["FedSolidBtn"] = "ठोस आहार दिया",
+            ["LastFeedingTemplate"] = "आखिरी बार खिलाया: {0}",
+            ["Breastfeeding"] = "स्तनपान",
+            ["Formula"] = "फॉर्मूला",
+            ["Solid"] = "ठोस आहार",
+            ["LogGrowthLabel"] = "विकास दर्ज करें (वैकल्पिक)",
+            ["WeightPlaceholder"] = "वज़न (किग्रा)",
+            ["HeightPlaceholder"] = "ऊंचाई (सेमी)",
+            ["HeadCircPlaceholder"] = "सिर की परिधि (सेमी)",
+            ["LogGrowthBtn"] = "विकास दर्ज करें",
+            ["SimulateSyncBtn"] = "डिवाइस सिंक का अनुकरण करें",
+            ["SimulateSyncTitle"] = "एक असली कनेक्टेड स्मार्ट स्केल के जुड़ने तक इसकी जगह काम करता है",
+            ["LastWeightTemplate"] = "आखिरी वज़न: {0} किग्रा",
+            ["LoggedManuallyLower"] = "मैन्युअल रूप से दर्ज किया गया",
+            ["SyncedFromTemplateLower"] = "{0} से सिंक किया गया",
+            ["WeightTrendTitle"] = "वज़न का रुझान",
+            ["VaccinationsTitle"] = "टीकाकरण",
+            ["DueTemplate"] = "देय {0}",
+            ["GivenOnTemplate"] = "{0} को दिया गया",
+            ["UndoTitle"] = "पूर्ववत करें",
+            ["UndoAriaTemplate"] = "{0} को दिया गया चिह्नित करना पूर्ववत करें",
+            ["OverdueLabel"] = "अतिदेय",
+            ["DueNowLabel"] = "अभी देय",
+            ["UpcomingLabel"] = "आगामी",
+            ["MarkGivenBtn"] = "दिया गया चिह्नित करें",
+            ["StatusTodayLabel"] = "आज कैसा चल रहा है?",
+            ["StatusPlaceholderInfant"] = "जैसे: अच्छी तरह खा रहा है पर ज़्यादा सो नहीं रहा, दोपहर में चिड़चिड़ा, बहुत अच्छा दिन",
+            ["CreatingPlan"] = "आपकी योजना बन रही है... 💗",
+            ["GetGuidance"] = "आज का मार्गदर्शन पाएं 🌸",
+            ["TryAgain"] = "फिर से कोशिश करें",
+            ["TodaysSmallSteps"] = "आज के छोटे कदम",
+            ["AtThisAge"] = "इस उम्र में",
+            ["ForYou"] = "आपके लिए",
+            ["CheckInAgain"] = "फिर से चेक इन करें",
+            ["MinAgo"] = " मिनट पहले",
+            ["HourAgo"] = " घंटे पहले",
+            ["DayAgo"] = " दिन पहले",
+            ["GenericRetryError"] = "कुछ गड़बड़ हो गई — क्या आप फिर से कोशिश कर सकती हैं?",
+        },
+        ["Telugu"] = new()
+        {
+            ["Title"] = "శిశు సంరక్షణ",
+            ["Subtitle"] = "ఆహారం మరియు నిద్రను నమోదు చేయండి, ఎదుగుదలను ట్రాక్ చేయండి, మరియు ఒక సున్నితమైన రోజువారీ ప్రణాళికను పొందండి.",
+            ["EmptyTitle"] = "ఇంకా ఎవరూ జోడించలేదు 🌷",
+            ["EmptyHint"] = "ట్రాకింగ్ ప్రారంభించడానికి మీ బిడ్డను జోడించండి.",
+            ["AddHeading"] = "మీ బిడ్డను జోడించండి",
+            ["NameLabel"] = "పేరు",
+            ["NamePlaceholder"] = "బిడ్డ పేరు",
+            ["DobLabel"] = "పుట్టిన తేదీ",
+            ["SaveHeart"] = "సేవ్ చేయండి 💗",
+            ["Cancel"] = "రద్దు చేయండి",
+            ["AddBabyBtn"] = "+ మీ బిడ్డను జోడించండి",
+            ["WeeksOld"] = "వారాల వయస్సు",
+            ["CaringFor"] = "{0} సంరక్షణ",
+            ["GetHelpBtn"] = "సహాయం పొందండి",
+            ["ExportBtn"] = "డాక్టర్ విజిట్ కోసం ఎగుమతి చేయండి",
+            ["SendSosBtn"] = "దీని గురించి SOS పంపండి",
+            ["SeenThisBtn"] = "నేను దీన్ని చూశాను",
+            ["DoctorSectionTitle"] = "తీవ్రమైన హెచ్చరికల కోసం డాక్టర్",
+            ["DoctorSectionHint"] = "ఏదైనా తీవ్రమైనదిగా గుర్తించబడితే, జననీ స్వయంచాలకంగా ఈ డాక్టర్‌కి ఇమెయిల్ పంపగలదు (సెట్టింగ్‌లలో Gmail కనెక్ట్ చేసి ఉండాలి).",
+            ["DoctorNamePlaceholder"] = "డాక్టర్ పేరు",
+            ["DoctorEmailPlaceholder"] = "డాక్టర్ ఇమెయిల్",
+            ["Save"] = "సేవ్ చేయండి",
+            ["Saved"] = "సేవ్ చేయబడింది",
+            ["ShareSectionTitle"] = "మరొక సంరక్షకునితో పంచుకోండి",
+            ["ShareHint"] = "మరొక జననీ ఖాతాకు {0}కి పూర్తి యాక్సెస్ ఇవ్వండి — ఆహారం, ఎదుగుదల, టీకాలు, మీరు చూసేదంతా.",
+            ["SharedPrefix"] = "పంచుకున్నారు {0}",
+            ["RevokeTitle"] = "యాక్సెస్ రద్దు చేయండి",
+            ["RevokeAriaTemplate"] = "{0} యాక్సెస్‌ను రద్దు చేయండి",
+            ["UsernamePlaceholder"] = "వారి జననీ యూజర్‌నేమ్",
+            ["ShareAccessBtn"] = "యాక్సెస్ పంచుకోండి",
+            ["FedBreastBtn"] = "తల్లిపాలు ఇచ్చారు",
+            ["FedFormulaBtn"] = "ఫార్ములా ఇచ్చారు",
+            ["FedSolidBtn"] = "ఘన ఆహారం ఇచ్చారు",
+            ["LastFeedingTemplate"] = "చివరిసారి తినిపించింది: {0}",
+            ["Breastfeeding"] = "తల్లిపాలు",
+            ["Formula"] = "ఫార్ములా",
+            ["Solid"] = "ఘన ఆహారం",
+            ["LogGrowthLabel"] = "ఎదుగుదల నమోదు చేయండి (ఐచ్ఛికం)",
+            ["WeightPlaceholder"] = "బరువు (కిలో)",
+            ["HeightPlaceholder"] = "ఎత్తు (సెం.మీ)",
+            ["HeadCircPlaceholder"] = "తల చుట్టుకొలత (సెం.మీ)",
+            ["LogGrowthBtn"] = "ఎదుగుదల నమోదు చేయండి",
+            ["SimulateSyncBtn"] = "పరికర సింక్‌ను అనుకరించండి",
+            ["SimulateSyncTitle"] = "నిజమైన కనెక్ట్ చేసిన స్మార్ట్ స్కేల్ అమర్చే వరకు దీని స్థానంలో పనిచేస్తుంది",
+            ["LastWeightTemplate"] = "చివరి బరువు: {0} కిలో",
+            ["LoggedManuallyLower"] = "మాన్యువల్‌గా నమోదు చేయబడింది",
+            ["SyncedFromTemplateLower"] = "{0} నుండి సింక్ చేయబడింది",
+            ["WeightTrendTitle"] = "బరువు ధోరణి",
+            ["VaccinationsTitle"] = "టీకాలు",
+            ["DueTemplate"] = "గడువు {0}",
+            ["GivenOnTemplate"] = "{0}న ఇవ్వబడింది",
+            ["UndoTitle"] = "రద్దు చేయండి",
+            ["UndoAriaTemplate"] = "{0}ని ఇచ్చినట్లు గుర్తించడాన్ని రద్దు చేయండి",
+            ["OverdueLabel"] = "మించిపోయింది",
+            ["DueNowLabel"] = "ఇప్పుడు గడువు",
+            ["UpcomingLabel"] = "రాబోయేది",
+            ["MarkGivenBtn"] = "ఇచ్చినట్లు గుర్తించండి",
+            ["StatusTodayLabel"] = "ఈరోజు ఎలా జరుగుతోంది?",
+            ["StatusPlaceholderInfant"] = "ఉదా: బాగా తింటున్నారు కానీ ఎక్కువ నిద్రపోవడం లేదు, మధ్యాహ్నం చిరాకుగా ఉన్నారు, చాలా బాగుంది",
+            ["CreatingPlan"] = "మీ ప్రణాళిక తయారవుతోంది... 💗",
+            ["GetGuidance"] = "ఈరోజు మార్గదర్శకత్వం పొందండి 🌸",
+            ["TryAgain"] = "మళ్ళీ ప్రయత్నించండి",
+            ["TodaysSmallSteps"] = "ఈరోజు చిన్న అడుగులు",
+            ["AtThisAge"] = "ఈ వయసులో",
+            ["ForYou"] = "మీ కోసం",
+            ["CheckInAgain"] = "మళ్ళీ చెక్ ఇన్ చేయండి",
+            ["MinAgo"] = " నిమిషాల క్రితం",
+            ["HourAgo"] = " గంటల క్రితం",
+            ["DayAgo"] = " రోజుల క్రితం",
+            ["GenericRetryError"] = "ఏదో తప్పు జరిగింది — దయచేసి మళ్ళీ ప్రయత్నించగలరా?",
+        },
+    };
+
+    private string T(string key) =>
+        (Strings.TryGetValue(_language, out var dict) && dict.TryGetValue(key, out var value))
+            ? value
+            : Strings["English"][key];
+}

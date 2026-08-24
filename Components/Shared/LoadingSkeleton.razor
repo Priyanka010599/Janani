@@ -1,0 +1,25 @@
+@* Components/Shared/LoadingSkeleton.razor
+   Reusable shimmer loading state shown while AI responses are generating.
+   Usage: <LoadingSkeleton Lines="3" Message="Creating your plan..." />
+*@
+
+@if (Visible)
+{
+    <div class="skeleton-wrap">
+        @if (!string.IsNullOrEmpty(Message))
+        {
+            <p class="skeleton-message">@Message 💗</p>
+        }
+        @for (int i = 0; i < Lines; i++)
+        {
+            var width = i == Lines - 1 ? "60%" : (i % 2 == 0 ? "100%" : "85%");
+            <div class="skeleton-line" style="width: @width"></div>
+        }
+    </div>
+}
+
+@code {
+    [Parameter] public bool Visible  { get; set; } = true;
+    [Parameter] public int  Lines    { get; set; } = 3;
+    [Parameter] public string Message { get; set; } = "Just a moment...";
+}

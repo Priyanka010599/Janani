@@ -1,0 +1,270 @@
+@page "/family-care"
+@using Janani.Models
+@using Janani.Data
+@using Janani.Services
+@using Microsoft.EntityFrameworkCore
+@inject AppDbContext Db
+@inject CurrentUserService CurrentUser
+@inject BloomAgentRegistry Agents
+@inject UserProfileCache ProfileCache
+@inject CareAccessService CareAccess
+@implements IDisposable
+@rendermode InteractiveServer
+
+<PageTitle>Janani — Family Care</PageTitle>
+
+<div class="bloom-container">
+    <div class="section-header">
+        <h1>👨‍👩‍👧 @T("Title")</h1>
+        <p class="subtitle">@T("Subtitle")</p>
+    </div>
+
+    @if (_snapshots.Count > 0)
+    {
+        <div class="contact-list">
+            @foreach (var s in _snapshots)
+            {
+                <a class="contact-card @s.CardClass" href="@s.Link">
+                    <div class="contact-info">
+                        <strong>@s.Icon @s.Name</strong>
+                        <span class="contact-relation">@s.Subtitle</span>
+                    </div>
+                    <span class="family-status @(s.HasAlert ? "alert" : "")">@s.Status</span>
+                </a>
+            }
+        </div>
+    }
+    else
+    {
+        <div class="empty-state">
+            <p>@T("EmptyTitle")</p>
+            <p>@T("EmptyHint")</p>
+        </div>
+    }
+
+    <div class="note-section">
+        <label>@T("AskLabel")</label>
+        <textarea @bind="_question" placeholder="@T("AskPlaceholder")" rows="2"></textarea>
+    </div>
+
+    <button class="bloom-btn primary" @onclick="AskAsync" disabled="@(string.IsNullOrWhiteSpace(_question) || _asking)">
+        @if (_asking) { <span>@T("Thinking")</span> } else { <span>@T("Ask")</span> }
+    </button>
+
+    @if (_error != null)
+    {
+        <div class="meal-gentle-note error-note">
+            <p>💗 @_error</p>
+            <button class="bloom-btn secondary small-btn" @onclick="AskAsync">@T("TryAgain")</button>
+        </div>
+    }
+
+    @if (_answer != null)
+    {
+        <div class="plan-card acknowledgment">
+            <p>@_answer</p>
+        </div>
+    }
+</div>
+
+@code {
+    private record FamilySnapshot(string Icon, string Name, string Subtitle, string Status, bool HasAlert, string CardClass, string Link);
+
+    private List<FamilySnapshot> _snapshots = [];
+    private string _question = string.Empty;
+    private string? _answer;
+    private bool _asking;
+    private string? _error;
+    private CancellationTokenSource? _cts;
+    private string _language = "English";
+
+    protected override async Task OnInitializedAsync()
+    {
+        var profile = await ProfileCache.GetAsync();
+        _language = (profile?.Language ?? AppLanguage.English).ToString();
+        var userId = await CurrentUser.GetUserIdAsync();
+        var snapshots = new List<FamilySnapshot>();
+
+        if (profile?.TracksPregnancy == true)
+        {
+            snapshots.Add(new FamilySnapshot("🌸", profile.Name, $"{profile.CurrentWeek} {T("WeeksPregnant")}",
+                T("TrackToday"), false, "", "/"));
+        }
+
+        var accessibleElderIds = await CareAccess.GetAccessibleElderIdsAsync(userId);
+        var elders = await Db.ElderProfiles.AsNoTracking()
+            .Where(e => accessibleElderIds.Contains(e.Id))
+            .OrderBy(e => e.Name)
+            .ToListAsync();
+        foreach (var elder in elders)
+        {
+            var alert = await Db.Alerts.AsNoTracking()
+                .Where(a => a.ElderProfileId == elder.Id && !a.Acknowledged)
+                .OrderByDescending(a => a.TriggeredAt)
+                .FirstOrDefaultAsync();
+            var lastVitals = await Db.VitalsReadings.AsNoTracking()
+                .Where(v => v.ElderProfileId == elder.Id)
+                .OrderByDescending(v => v.RecordedAt)
+                .FirstOrDefaultAsync();
+
+            var status = alert != null
+                ? (alert.Severity == AlertSeverity.Critical ? T("NeedsAttention") : T("WorthChecking"))
+                : lastVitals != null ? $"{T("VitalsLogged")} {FormatAgo(lastVitals.RecordedAt)}" : T("NoVitalsYet");
+            var cardClass = alert == null ? "" : alert.Severity == AlertSeverity.Critical ? "is-alert-critical" : "is-alert-warning";
+
+            snapshots.Add(new FamilySnapshot("🌼", elder.Name, elder.Relation, status, alert != null, cardClass, "/elder-care"));
+        }
+
+        var accessibleInfantIds = await CareAccess.GetAccessibleInfantIdsAsync(userId);
+        var infants = await Db.InfantProfiles.AsNoTracking()
+            .Where(i => accessibleInfantIds.Contains(i.Id))
+            .OrderBy(i => i.Name)
+            .ToListAsync();
+        foreach (var infant in infants)
+        {
+            var lastFeeding = await Db.FeedingLogs.AsNoTracking()
+                .Where(f => f.InfantProfileId == infant.Id)
+                .OrderByDescending(f => f.FedAt)
+                .FirstOrDefaultAsync();
+            var given = await Db.VaccinationRecords.AsNoTracking()
+                .Where(v => v.InfantProfileId == infant.Id)
+                .ToListAsync();
+            var overdueCount = VaccinationSchedule.BuildStatus(infant.AgeInWeeks, given)
+                .Count(v => v.Status == VaccinationStatus.Overdue);
+            var growthAlert = await Db.InfantAlerts.AsNoTracking()
+                .Where(a => a.InfantProfileId == infant.Id && !a.Acknowledged)
+                .OrderByDescending(a => a.TriggeredAt)
+                .FirstOrDefaultAsync();
+
+            var feedingStatus = lastFeeding != null ? $"{T("Fed")} {FormatAgo(lastFeeding.FedAt)}" : T("NoFeedingsYet");
+            var status = growthAlert != null ? $"🚨 {growthAlert.Message}"
+                : overdueCount > 0 ? $"🚨 {overdueCount} {T("VaccinesOverdue")}"
+                : feedingStatus;
+            var cardClass = growthAlert != null || overdueCount > 0 ? "is-alert-critical" : "";
+            snapshots.Add(new FamilySnapshot("👶", infant.Name, $"{infant.AgeInWeeks} {T("WeeksOld")}", status, growthAlert != null || overdueCount > 0, cardClass, "/infant-care"));
+        }
+
+        _snapshots = snapshots;
+    }
+
+    private string FormatAgo(DateTime at)
+    {
+        var span = DateTime.UtcNow - at;
+        if (span.TotalMinutes < 60) return $"{(int)span.TotalMinutes}{T("MinAgo")}";
+        if (span.TotalHours < 24) return $"{(int)span.TotalHours}{T("HourAgo")}";
+        return $"{(int)span.TotalDays}{T("DayAgo")}";
+    }
+
+    private async Task AskAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_question)) return;
+        _asking = true;
+        _error = null;
+        StateHasChanged();
+
+        _cts?.Cancel();
+        _cts = new CancellationTokenSource();
+
+        try
+        {
+            var profile = await ProfileCache.GetAsync();
+            _answer = await Agents.CaregiverCoordination.AskAsync(profile?.Name ?? "there", _question, _cts.Token);
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception)
+        {
+            _error = T("GenericRetryError");
+        }
+
+        _asking = false;
+    }
+
+    public void Dispose() => _cts?.Cancel();
+
+    private static readonly Dictionary<string, Dictionary<string, string>> Strings = new()
+    {
+        ["English"] = new()
+        {
+            ["Title"] = "Family Care",
+            ["Subtitle"] = "Everyone you care for, at a glance — and ask anything, including what government support you might be entitled to.",
+            ["EmptyTitle"] = "No one added yet 🌷",
+            ["EmptyHint"] = "Add someone from Elder Care or Infant Care to see them here.",
+            ["AskLabel"] = "Ask about your family",
+            ["AskPlaceholder"] = "e.g. How is everyone doing? / What is JSSK and am I eligible?",
+            ["Thinking"] = "Thinking... 💗",
+            ["Ask"] = "Ask",
+            ["TryAgain"] = "Try again",
+            ["WeeksPregnant"] = "weeks pregnant",
+            ["TrackToday"] = "Track today ›",
+            ["NeedsAttention"] = "🚨 Needs attention",
+            ["WorthChecking"] = "⚠️ Worth checking",
+            ["VitalsLogged"] = "Vitals logged",
+            ["NoVitalsYet"] = "No vitals yet",
+            ["Fed"] = "Fed",
+            ["NoFeedingsYet"] = "No feedings logged yet",
+            ["VaccinesOverdue"] = "vaccine(s) overdue",
+            ["WeeksOld"] = "weeks old",
+            ["MinAgo"] = " min ago",
+            ["HourAgo"] = "h ago",
+            ["DayAgo"] = "d ago",
+            ["GenericRetryError"] = "That took a wrong turn — could you try again?",
+        },
+        ["Hindi"] = new()
+        {
+            ["Title"] = "पारिवारिक देखभाल",
+            ["Subtitle"] = "आप जिनकी देखभाल करती हैं वे सब एक नज़र में — और कुछ भी पूछें, जिसमें यह भी शामिल है कि आप किस सरकारी सहायता के हकदार हो सकती हैं।",
+            ["EmptyTitle"] = "अभी तक कोई नहीं जोड़ा गया 🌷",
+            ["EmptyHint"] = "उन्हें यहां देखने के लिए एल्डर केयर या इन्फैंट केयर से किसी को जोड़ें।",
+            ["AskLabel"] = "अपने परिवार के बारे में पूछें",
+            ["AskPlaceholder"] = "जैसे: सब कैसे हैं? / JSSK क्या है और क्या मैं इसकी पात्र हूं?",
+            ["Thinking"] = "सोच रहे हैं... 💗",
+            ["Ask"] = "पूछें",
+            ["TryAgain"] = "फिर से कोशिश करें",
+            ["WeeksPregnant"] = "सप्ताह की गर्भवती",
+            ["TrackToday"] = "आज ट्रैक करें ›",
+            ["NeedsAttention"] = "🚨 ध्यान देने की ज़रूरत है",
+            ["WorthChecking"] = "⚠️ जांचने योग्य",
+            ["VitalsLogged"] = "वाइटल्स दर्ज किए गए",
+            ["NoVitalsYet"] = "अभी तक कोई वाइटल्स नहीं",
+            ["Fed"] = "खिलाया गया",
+            ["NoFeedingsYet"] = "अभी तक कोई फीडिंग दर्ज नहीं",
+            ["VaccinesOverdue"] = "टीका(टीके) अतिदेय",
+            ["WeeksOld"] = "सप्ताह की उम्र",
+            ["MinAgo"] = " मिनट पहले",
+            ["HourAgo"] = " घंटे पहले",
+            ["DayAgo"] = " दिन पहले",
+            ["GenericRetryError"] = "कुछ गड़बड़ हो गई — क्या आप फिर से कोशिश कर सकती हैं?",
+        },
+        ["Telugu"] = new()
+        {
+            ["Title"] = "కుటుంబ సంరక్షణ",
+            ["Subtitle"] = "మీరు సంరక్షణ చేసే వారందరూ ఒకే చూపులో — మరియు మీరు పొందగలిగే ప్రభుత్వ మద్దతు గురించి సహా ఏదైనా అడగండి.",
+            ["EmptyTitle"] = "ఇంకా ఎవరూ జోడించలేదు 🌷",
+            ["EmptyHint"] = "వారిని ఇక్కడ చూడటానికి ఎల్డర్ కేర్ లేదా ఇన్ఫెంట్ కేర్ నుండి ఎవరినైనా జోడించండి.",
+            ["AskLabel"] = "మీ కుటుంబం గురించి అడగండి",
+            ["AskPlaceholder"] = "ఉదా: అందరూ ఎలా ఉన్నారు? / JSSK అంటే ఏమిటి మరియు నేను అర్హురాలినేనా?",
+            ["Thinking"] = "ఆలోచిస్తోంది... 💗",
+            ["Ask"] = "అడగండి",
+            ["TryAgain"] = "మళ్ళీ ప్రయత్నించండి",
+            ["WeeksPregnant"] = "వారాల గర్భవతి",
+            ["TrackToday"] = "ఈరోజు ట్రాక్ చేయండి ›",
+            ["NeedsAttention"] = "🚨 దృష్టి అవసరం",
+            ["WorthChecking"] = "⚠️ పరిశీలించదగినది",
+            ["VitalsLogged"] = "వైటల్స్ నమోదు చేయబడ్డాయి",
+            ["NoVitalsYet"] = "ఇంకా వైటల్స్ లేవు",
+            ["Fed"] = "తినిపించారు",
+            ["NoFeedingsYet"] = "ఇంకా ఆహారం నమోదు కాలేదు",
+            ["VaccinesOverdue"] = "టీకా(లు) మించిపోయాయి",
+            ["WeeksOld"] = "వారాల వయస్సు",
+            ["MinAgo"] = " నిమిషాల క్రితం",
+            ["HourAgo"] = " గంటల క్రితం",
+            ["DayAgo"] = " రోజుల క్రితం",
+            ["GenericRetryError"] = "ఏదో తప్పు జరిగింది — దయచేసి మళ్ళీ ప్రయత్నించగలరా?",
+        },
+    };
+
+    private string T(string key) =>
+        (Strings.TryGetValue(_language, out var dict) && dict.TryGetValue(key, out var value))
+            ? value
+            : Strings["English"][key];
+}

@@ -1,0 +1,131 @@
+@page "/infant-care/export/{InfantId:int}"
+@using Janani.Models
+@using Janani.Data
+@using Janani.Services
+@using Microsoft.EntityFrameworkCore
+@inject AppDbContext Db
+@inject CurrentUserService CurrentUser
+@inject CareAccessService CareAccess
+@inject IJSRuntime JS
+@rendermode InteractiveServer
+
+<PageTitle>Janani — @(_infant?.Name ?? "Export") Summary</PageTitle>
+
+@if (!_loaded)
+{
+    <div class="bloom-container"><p class="sos-hint">Loading…</p></div>
+}
+else if (_infant == null)
+{
+    <div class="bloom-container"><p class="sos-hint">That profile couldn't be found.</p></div>
+}
+else
+{
+    <div class="bloom-container export-page">
+        <div class="export-actions no-print">
+            <button class="bloom-btn primary" @onclick="PrintAsync">🖨️ Print / Save as PDF</button>
+            <a class="bloom-btn secondary" href="/infant-care">← Back</a>
+        </div>
+
+        <div class="export-header">
+            <h1>@_infant.Name</h1>
+            <p class="export-meta">@_infant.AgeInWeeks weeks old, born @_infant.DateOfBirth.ToString("dd MMM yyyy") — summary generated @DateTime.Now.ToString("dd MMM yyyy")</p>
+        </div>
+
+        <h2>Growth history</h2>
+        @if (_growth.Count == 0)
+        {
+            <p class="sos-hint">No growth entries recorded yet.</p>
+        }
+        else
+        {
+            <table class="export-table">
+                <thead>
+                    <tr><th>Date</th><th>Weight</th><th>Height</th><th>Head circ.</th></tr>
+                </thead>
+                <tbody>
+                    @foreach (var g in _growth)
+                    {
+                        <tr>
+                            <td>@g.RecordedAt.ToString("dd MMM yyyy")</td>
+                            <td>@(g.WeightKg is decimal w ? $"{w} kg" : "—")</td>
+                            <td>@(g.HeightCm is decimal h ? $"{h} cm" : "—")</td>
+                            <td>@(g.HeadCircumferenceCm is decimal hc ? $"{hc} cm" : "—")</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
+
+        <h2>Vaccinations</h2>
+        <table class="export-table">
+            <thead>
+                <tr><th>Vaccine</th><th>Due</th><th>Status</th></tr>
+            </thead>
+            <tbody>
+                @foreach (var v in _vaccineStatuses)
+                {
+                    <tr>
+                        <td>@v.Vaccine.Name</td>
+                        <td>@v.Vaccine.AgeLabel</td>
+                        <td>@(v.Status == VaccinationStatus.Given ? $"Given {v.GivenAt:dd MMM yyyy}" : v.Status.ToString())</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+
+        <h2>Recent alerts</h2>
+        @if (_alerts.Count == 0)
+        {
+            <p class="sos-hint">No alerts on record.</p>
+        }
+        else
+        {
+            <ul class="export-list">
+                @foreach (var a in _alerts)
+                {
+                    <li>[@a.TriggeredAt.ToString("dd MMM yyyy")] @(a.Severity == AlertSeverity.Critical ? "Critical" : "Warning") — @a.Message</li>
+                }
+            </ul>
+        }
+    </div>
+}
+
+@code {
+    [Parameter] public int InfantId { get; set; }
+
+    private InfantProfile? _infant;
+    private bool _loaded;
+    private List<GrowthEntry> _growth = [];
+    private List<InfantAlert> _alerts = [];
+    private List<VaccinationSchedule.VaccineWithStatus> _vaccineStatuses = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        var userId = await CurrentUser.GetUserIdAsync();
+        var accessibleIds = await CareAccess.GetAccessibleInfantIdsAsync(userId);
+        _infant = accessibleIds.Contains(InfantId)
+            ? await Db.InfantProfiles.AsNoTracking().FirstOrDefaultAsync(i => i.Id == InfantId)
+            : null;
+        if (_infant == null) { _loaded = true; return; }
+
+        _growth = await Db.GrowthEntries.AsNoTracking()
+            .Where(g => g.InfantProfileId == InfantId)
+            .OrderByDescending(g => g.RecordedAt)
+            .Take(20)
+            .ToListAsync();
+        _alerts = await Db.InfantAlerts.AsNoTracking()
+            .Where(a => a.InfantProfileId == InfantId)
+            .OrderByDescending(a => a.TriggeredAt)
+            .Take(10)
+            .ToListAsync();
+
+        var given = await Db.VaccinationRecords.AsNoTracking()
+            .Where(v => v.InfantProfileId == InfantId)
+            .ToListAsync();
+        _vaccineStatuses = VaccinationSchedule.BuildStatus(_infant.AgeInWeeks, given);
+        _loaded = true;
+    }
+
+    private async Task PrintAsync() => await JS.InvokeVoidAsync("print");
+}

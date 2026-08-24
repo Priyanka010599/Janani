@@ -1,0 +1,199 @@
+@page "/register"
+@attribute [AllowAnonymous]
+@using System.ComponentModel.DataAnnotations
+@using System.Security.Claims
+@using Microsoft.AspNetCore.Authentication
+@using Microsoft.AspNetCore.Authentication.Cookies
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Identity
+@using Janani.Data
+@using Janani.Models
+@using Microsoft.EntityFrameworkCore
+@inject AppDbContext Db
+@inject NavigationManager Nav
+
+<PageTitle>Janani — Create Account</PageTitle>
+
+<div class="bloom-container auth-container">
+    <div class="auth-card">
+        <div class="section-header">
+            <h1>🌸 Welcome to Janani</h1>
+            <p class="subtitle">Let's set up your own private space.</p>
+        </div>
+
+        @if (_error != null)
+        {
+            <div class="meal-gentle-note error-note"><p>💗 @_error</p></div>
+        }
+
+        <EditForm Model="Input" FormName="register" OnValidSubmit="HandleRegisterAsync" method="post">
+            <DataAnnotationsValidator />
+            <div class="form-field">
+                <label>Your name</label>
+                <InputText @bind-Value="Input.Name" placeholder="What should we call you?" />
+            </div>
+            <div class="form-field">
+                <label>Username</label>
+                <InputText @bind-Value="Input.Username" autocomplete="username" />
+            </div>
+            <div class="form-field">
+                <label>Email</label>
+                <InputText @bind-Value="Input.Email" type="email" autocomplete="email" />
+            </div>
+            <div class="form-field">
+                <label>Password</label>
+                <InputText @bind-Value="Input.Password" type="password" autocomplete="new-password" />
+            </div>
+            <div class="form-field">
+                <label>Confirm password</label>
+                <InputText @bind-Value="Input.ConfirmPassword" type="password" autocomplete="new-password" />
+            </div>
+            <div class="form-field">
+                <label class="checkbox-field">
+                    <InputCheckbox @bind-Value="Input.NotPregnant" />
+                    I'm here as a caregiver, not currently pregnant myself
+                </label>
+            </div>
+            <div class="form-field">
+                <label>How many weeks pregnant are you today?</label>
+                <InputNumber @bind-Value="Input.WeeksPregnant" min="0" max="42" />
+                <p class="sos-hint">Skip this if you checked the box above — you can also change this any time later in your profile.</p>
+            </div>
+            <div class="form-field">
+                <label class="checkbox-field">
+                    <InputCheckbox @bind-Value="Input.CaresForElder" />
+                    I care for an elder or aging parent
+                </label>
+            </div>
+            <div class="form-field">
+                <label class="checkbox-field">
+                    <InputCheckbox @bind-Value="Input.CaresForInfant" />
+                    I care for an infant or baby
+                </label>
+                <p class="sos-hint">All of these can be changed any time later in your profile.</p>
+            </div>
+            <button class="bloom-btn primary" type="submit">Create my account 🌷</button>
+        </EditForm>
+
+        <p class="auth-switch">Already have an account? <a href="/login">Log in</a></p>
+    </div>
+</div>
+
+@code {
+    [SupplyParameterFromForm]
+    private RegisterModel Input { get; set; } = new();
+
+    [CascadingParameter]
+    private HttpContext HttpContext { get; set; } = default!;
+
+    private string? _error;
+
+    private async Task HandleRegisterAsync()
+    {
+        var username = Input.Username.Trim().ToLowerInvariant();
+        var email = Input.Email.Trim().ToLowerInvariant();
+        if (await Db.Users.AnyAsync(u => u.Username == username))
+        {
+            _error = "That username is already taken.";
+            return;
+        }
+        if (await Db.Users.AnyAsync(u => u.Email == email))
+        {
+            _error = "An account with this email already exists.";
+            return;
+        }
+
+        var isFirstUser = !await Db.Users.AnyAsync();
+
+        var user = new User { Username = username, Email = email };
+        user.PasswordHash = new PasswordHasher<User>().HashPassword(user, Input.Password);
+        Db.Users.Add(user);
+        await Db.SaveChangesAsync(); // assigns user.Id
+
+        var pregnancyStart = DateOnly.FromDateTime(DateTime.Today).AddDays(-(Input.WeeksPregnant * 7));
+        var name = Input.Name.Trim();
+
+        if (isFirstUser)
+        {
+            // First-ever registrant inherits any pre-existing data (the
+            // sentinel UserId=0 rows left behind by Program.cs's startup
+            // migration when it added the UserId column to an existing
+            // janani.db) instead of starting with an empty account.
+            var existingProfile = await Db.UserProfiles.FirstOrDefaultAsync(p => p.UserId == 0);
+            if (existingProfile != null)
+            {
+                existingProfile.UserId = user.Id;
+                existingProfile.Name = name;
+                existingProfile.PregnancyStartDate = pregnancyStart;
+                existingProfile.TracksPregnancy = !Input.NotPregnant;
+                existingProfile.CaresForElder = Input.CaresForElder;
+                existingProfile.CaresForInfant = Input.CaresForInfant;
+            }
+            else
+            {
+                Db.UserProfiles.Add(new UserProfile
+                {
+                    UserId = user.Id, Name = name, PregnancyStartDate = pregnancyStart,
+                    TracksPregnancy = !Input.NotPregnant,
+                    CaresForElder = Input.CaresForElder, CaresForInfant = Input.CaresForInfant
+                });
+            }
+
+            foreach (var table in new[]
+            {
+                "MoodCheckIns", "JournalEntries", "Appointments",
+                "WaterIntake", "KickSessions", "Medicines", "EmergencyContacts"
+            })
+            {
+                await Db.Database.ExecuteSqlRawAsync($"UPDATE {table} SET UserId = {{0}} WHERE UserId = 0", user.Id);
+            }
+        }
+        else
+        {
+            Db.UserProfiles.Add(new UserProfile
+            {
+                UserId = user.Id, Name = name, PregnancyStartDate = pregnancyStart,
+                TracksPregnancy = !Input.NotPregnant,
+                CaresForElder = Input.CaresForElder, CaresForInfant = Input.CaresForInfant
+            });
+        }
+
+        await Db.SaveChangesAsync();
+
+        var claims = new List<Claim>
+        {
+            new(ClaimTypes.NameIdentifier, user.Id.ToString()),
+            new(ClaimTypes.Name, user.Username)
+        };
+        var identity = new ClaimsIdentity(claims, CookieAuthenticationDefaults.AuthenticationScheme);
+        await HttpContext.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, new ClaimsPrincipal(identity));
+
+        Nav.NavigateTo("/", forceLoad: true);
+    }
+
+    private class RegisterModel
+    {
+        [Required, StringLength(80)]
+        public string Name { get; set; } = string.Empty;
+
+        [Required, StringLength(30, MinimumLength = 3, ErrorMessage = "Username must be 3-30 characters.")]
+        [RegularExpression(@"^[a-zA-Z0-9_.]+$", ErrorMessage = "Letters, numbers, underscores, and dots only.")]
+        public string Username { get; set; } = string.Empty;
+
+        [Required, EmailAddress]
+        public string Email { get; set; } = string.Empty;
+
+        [Required, MinLength(8, ErrorMessage = "Password must be at least 8 characters.")]
+        public string Password { get; set; } = string.Empty;
+
+        [Required, Compare(nameof(Password), ErrorMessage = "Passwords don't match.")]
+        public string ConfirmPassword { get; set; } = string.Empty;
+
+        [Range(0, 42, ErrorMessage = "Enter a number between 0 and 42.")]
+        public int WeeksPregnant { get; set; } = 12;
+
+        public bool NotPregnant { get; set; }
+        public bool CaresForElder { get; set; }
+        public bool CaresForInfant { get; set; }
+    }
+}

@@ -1,0 +1,56 @@
+# Build output
+bin/
+obj/
+out/
+**/bin/
+**/obj/
+
+# Local database
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+*.backup*
+
+# IDE
+.vs/
+.vscode/
+
+# Secrets / local credentials — never commit these
+gcp-key.json
+appsettings.*.local.json
+agents/.env
+**/keystore/
+*.jks
+*.keystore
+keystore.properties
+
+# Manual dated backups
+Backups/
+
+# Scratch/log files accumulated during local debugging
+*.log
+_run*.txt
+_run*.log
+run_*.log
+cloudrun-*.txt
+cloudrun-*.json
+deploy_*.log
+deploy-*.log
+
+# ── Python agents service ──
+agents/.venv/
+agents/__pycache__/
+**/__pycache__/
+*.pyc
+
+# ── Mobile (Capacitor/Android/iOS) ──
+mobile/node_modules/
+mobile/android-sdk/
+mobile/gradle-*/
+mobile/android/.gradle/
+mobile/android/build/
+mobile/android/app/build/
+mobile/android/capacitor-cordova-android-plugins/
+mobile/ios/App/Pods/
+mobile/ios/App/build/

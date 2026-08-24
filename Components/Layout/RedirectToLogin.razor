@@ -1,0 +1,12 @@
+@* Components/Layout/RedirectToLogin.razor
+   Used as the <NotAuthorized> template in Routes.razor. forceLoad:true
+   matters here — this may run inside an already-interactive circuit, and a
+   normal Blazor-intercepted navigation wouldn't pick up the fresh
+   unauthenticated state on the next request the way a real reload does.
+*@
+@inject NavigationManager Nav
+
+@code {
+    protected override void OnInitialized() =>
+        Nav.NavigateTo($"/login?returnUrl={Uri.EscapeDataString(Nav.Uri)}", forceLoad: true);
+}

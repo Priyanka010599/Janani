@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Janani</string>
+    <string name="title_activity_main">Janani</string>
+    <string name="package_name">com.janani.app</string>
+    <string name="custom_url_scheme">com.janani.app</string>
+</resources>

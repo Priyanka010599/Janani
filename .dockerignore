@@ -1,0 +1,13 @@
+.git
+.gitignore
+.vs
+.vscode
+bin
+obj
+out
+*.db
+*.db-journal
+*.backup*
+docker-compose*.yml
+deploy-cloudrun*
+README.md
