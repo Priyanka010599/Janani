@@ -16,8 +16,6 @@ namespace Janani.Services;
 
 public static class GrowthThresholdChecker
 {
-    public record Concern(string Description, AlertSeverity Severity);
-
     public static List<Concern> Check(InfantProfile infant, GrowthEntry latest, GrowthEntry? previous)
     {
         var concerns = new List<Concern>();

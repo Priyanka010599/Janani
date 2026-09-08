@@ -19,7 +19,7 @@ public class HealthMonitorService(HttpClient agentServiceClient) : IBloomAgent
     private record HealthAlertExplanation(string Explanation, string SuggestedAction);
 
     public async Task<(string Explanation, string SuggestedAction)> ExplainAsync(
-        ElderProfile elder, List<VitalsThresholdChecker.Concern> concerns,
+        ElderProfile elder, List<Concern> concerns,
         AlertSeverity severity, AppLanguage language = AppLanguage.English, CancellationToken ct = default)
     {
         var request = new

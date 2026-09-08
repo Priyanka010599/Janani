@@ -26,6 +26,23 @@ using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// ── Logging ─────────────────────────────────────────────────────────────────
+// K_SERVICE is set automatically on every Cloud Run instance (a Knative env
+// var) but never locally, so this only switches on in production. JSON lines
+// on stdout are what Cloud Logging's agent parses into a queryable
+// jsonPayload instead of one opaque text blob per entry -- no new GCP
+// resource or client library needed, Cloud Run already ships stdout there.
+// Local `dotnet run` keeps the default human-readable console.
+if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("K_SERVICE")))
+{
+    builder.Logging.ClearProviders();
+    builder.Logging.AddJsonConsole(options =>
+    {
+        options.UseUtcTimestamp = true;
+        options.IncludeScopes = true;
+    });
+}
+
 // ── Database ────────────────────────────────────────────────────────────────
 // Cloud SQL (PostgreSQL) on GCP when DATABASE_URL is set; SQLite for local dev.
 // Cloud Run: set DATABASE_URL via Secret Manager or --set-secrets.
@@ -37,14 +54,23 @@ void ConfigureDb(DbContextOptionsBuilder options)
     else
         options.UseSqlite("Data Source=janani.db"); // Local dev fallback
 }
-builder.Services.AddDbContext<AppDbContext>(ConfigureDb);
-// Also registered as a factory, for anything that runs alongside a page's own
-// DbContext usage in the same render batch (NavMenu via UserProfileCache) —
-// see UserProfileCache's comment for why a shared scoped DbContext isn't
-// safe there even after memoizing in-flight calls to itself.
-builder.Services.AddPooledDbContextFactory<AppDbContext>(ConfigureDb);
+// Registered as a factory (not AddDbContext) so DbContextOptions<AppDbContext>
+// has exactly one, singleton-compatible registration — AddDbContext's own
+// DbContextOptions registration is Scoped, which conflicts with any
+// singleton-lifetime factory for the same context type and fails
+// ASP.NET Core's service-provider validation at startup. The scoped
+// AppDbContext everywhere else injects is then derived from the factory
+// below, so page code is unaffected.
+builder.Services.AddDbContextFactory<AppDbContext>(ConfigureDb);
+// Independent instance per resolution — needed for anything that runs
+// alongside a page's own DbContext usage in the same render batch (NavMenu
+// via UserProfileCache); see UserProfileCache's comment for why a shared
+// scoped DbContext isn't safe there even after memoizing in-flight calls.
+builder.Services.AddScoped<AppDbContext>(sp => sp.GetRequiredService<IDbContextFactory<AppDbContext>>().CreateDbContext());
 builder.Services.AddScoped<UserProfileCache>();
 builder.Services.AddScoped<CareAccessService>();
+builder.Services.AddSingleton<IElderDeviceAuthenticator, GlobalElderDeviceAuthenticator>();
+builder.Services.AddScoped<IPregnancyDeviceAuthenticator, PerUserPregnancyDeviceAuthenticator>();
 
 // Persist the Data Protection key ring in the same database — see
 // AppDbContext's IDataProtectionKeyContext comment for why this matters.
@@ -74,7 +100,7 @@ builder.Services.AddAuthorization(options =>
 builder.Services.AddCascadingAuthenticationState();
 builder.Services.AddScoped<CurrentUserService>();
 builder.Services.AddScoped<ICalendarSyncService, GoogleCalendarSyncService>();
-builder.Services.AddScoped<IEmailNotificationService, GmailNotificationService>();
+builder.Services.AddSingleton<IEmailNotificationService, SmtpEmailNotificationService>();
 
 // ── Response compression ───────────────────────────────────────────────────
 builder.Services.AddResponseCompression(options =>
@@ -141,6 +167,19 @@ var healthMonitorClient = builder.Services.AddHttpClient<HealthMonitorService>(c
     client.BaseAddress = new Uri(agentServiceUrl);
     client.Timeout = TimeSpan.FromSeconds(30);
 });
+var pregnancyVitalsMonitorClient = builder.Services.AddHttpClient<PregnancyVitalsMonitorService>(client =>
+{
+    client.BaseAddress = new Uri(agentServiceUrl);
+    client.Timeout = TimeSpan.FromSeconds(30);
+});
+var postpartumRecoveryMonitorClient = builder.Services.AddHttpClient<PostpartumRecoveryMonitorService>(client =>
+{
+    client.BaseAddress = new Uri(agentServiceUrl);
+    client.Timeout = TimeSpan.FromSeconds(30);
+});
+builder.Services.AddScoped<PostpartumCheckInService>();
+builder.Services.AddScoped<VitalsIngestService>();
+builder.Services.AddScoped<PregnancyVitalsIngestService>();
 var caregiverClient = builder.Services.AddHttpClient<CaregiverCoordinationService>(client =>
 {
     client.BaseAddress = new Uri(agentServiceUrl);
@@ -178,6 +217,8 @@ if (agentServiceRequiresAuth)
     birthPlanClient.AddHttpMessageHandler(() => new GoogleIdTokenHandler(agentServiceUrl));
     elderNurtureClient.AddHttpMessageHandler(() => new GoogleIdTokenHandler(agentServiceUrl));
     healthMonitorClient.AddHttpMessageHandler(() => new GoogleIdTokenHandler(agentServiceUrl));
+    pregnancyVitalsMonitorClient.AddHttpMessageHandler(() => new GoogleIdTokenHandler(agentServiceUrl));
+    postpartumRecoveryMonitorClient.AddHttpMessageHandler(() => new GoogleIdTokenHandler(agentServiceUrl));
     caregiverClient.AddHttpMessageHandler(() => new GoogleIdTokenHandler(agentServiceUrl));
     infantCareClient.AddHttpMessageHandler(() => new GoogleIdTokenHandler(agentServiceUrl));
     medicineLookupClient.AddHttpMessageHandler(() => new GoogleIdTokenHandler(agentServiceUrl));
@@ -383,6 +424,60 @@ using (var scope = app.Services.CreateScope())
         db.Database.ExecuteSqlRaw("ALTER TABLE UserProfiles ADD COLUMN CaresForInfant INTEGER NOT NULL DEFAULT 0;");
     }
 
+    // DoctorName/DoctorEmail — who a Critical pregnancy vitals alert
+    // auto-emails, same story as the elder-care columns above.
+    if (!ColumnExists("UserProfiles", "DoctorName"))
+    {
+        db.Database.ExecuteSqlRaw("ALTER TABLE UserProfiles ADD COLUMN DoctorName TEXT NULL;");
+    }
+    if (!ColumnExists("UserProfiles", "DoctorEmail"))
+    {
+        db.Database.ExecuteSqlRaw("ALTER TABLE UserProfiles ADD COLUMN DoctorEmail TEXT NULL;");
+    }
+
+    // Postpartum Recovery Guide capture — DeliveryDate/DeliveryType/
+    // FeedingMethod are nullable (unset until she's actually delivered);
+    // DeliveryComplications is a [Flags] enum, defaults to 0 (None).
+    if (!ColumnExists("UserProfiles", "DeliveryDate"))
+    {
+        db.Database.ExecuteSqlRaw("ALTER TABLE UserProfiles ADD COLUMN DeliveryDate TEXT NULL;");
+    }
+    if (!ColumnExists("UserProfiles", "DeliveryType"))
+    {
+        db.Database.ExecuteSqlRaw("ALTER TABLE UserProfiles ADD COLUMN DeliveryType INTEGER NULL;");
+    }
+    if (!ColumnExists("UserProfiles", "DeliveryComplications"))
+    {
+        db.Database.ExecuteSqlRaw("ALTER TABLE UserProfiles ADD COLUMN DeliveryComplications INTEGER NOT NULL DEFAULT 0;");
+    }
+    if (!ColumnExists("UserProfiles", "FeedingMethod"))
+    {
+        db.Database.ExecuteSqlRaw("ALTER TABLE UserProfiles ADD COLUMN FeedingMethod INTEGER NULL;");
+    }
+
+    // Bereavement capture — all nullable; unset means "no outcome recorded",
+    // which CareContext treats as equivalent to LiveBirth (no suppression).
+    if (!ColumnExists("UserProfiles", "BirthOutcome"))
+    {
+        db.Database.ExecuteSqlRaw("ALTER TABLE UserProfiles ADD COLUMN BirthOutcome INTEGER NULL;");
+    }
+    if (!ColumnExists("UserProfiles", "BabyName"))
+    {
+        db.Database.ExecuteSqlRaw("ALTER TABLE UserProfiles ADD COLUMN BabyName TEXT NULL;");
+    }
+    if (!ColumnExists("UserProfiles", "BabyDate"))
+    {
+        db.Database.ExecuteSqlRaw("ALTER TABLE UserProfiles ADD COLUMN BabyDate TEXT NULL;");
+    }
+
+    // Pregnancy vitals device pairing — null until the user generates one in
+    // Settings. See UserProfile.DevicePairingToken's comment for why this is
+    // per-user rather than one global token like elder/infant vitals ingest.
+    if (!ColumnExists("UserProfiles", "DevicePairingToken"))
+    {
+        db.Database.ExecuteSqlRaw("ALTER TABLE UserProfiles ADD COLUMN DevicePairingToken TEXT NULL;");
+    }
+
     } // isSqlite
 
     // Same TracksPregnancy/Language backfill as above, Postgres side —
@@ -394,6 +489,16 @@ using (var scope = app.Services.CreateScope())
         db.Database.ExecuteSqlRaw("""ALTER TABLE "UserProfiles" ADD COLUMN IF NOT EXISTS "Language" integer NOT NULL DEFAULT 0;""");
         db.Database.ExecuteSqlRaw("""ALTER TABLE "UserProfiles" ADD COLUMN IF NOT EXISTS "CaresForElder" boolean NOT NULL DEFAULT false;""");
         db.Database.ExecuteSqlRaw("""ALTER TABLE "UserProfiles" ADD COLUMN IF NOT EXISTS "CaresForInfant" boolean NOT NULL DEFAULT false;""");
+        db.Database.ExecuteSqlRaw("""ALTER TABLE "UserProfiles" ADD COLUMN IF NOT EXISTS "DoctorName" text NULL;""");
+        db.Database.ExecuteSqlRaw("""ALTER TABLE "UserProfiles" ADD COLUMN IF NOT EXISTS "DoctorEmail" text NULL;""");
+        db.Database.ExecuteSqlRaw("""ALTER TABLE "UserProfiles" ADD COLUMN IF NOT EXISTS "DeliveryDate" date NULL;""");
+        db.Database.ExecuteSqlRaw("""ALTER TABLE "UserProfiles" ADD COLUMN IF NOT EXISTS "DeliveryType" integer NULL;""");
+        db.Database.ExecuteSqlRaw("""ALTER TABLE "UserProfiles" ADD COLUMN IF NOT EXISTS "DeliveryComplications" integer NOT NULL DEFAULT 0;""");
+        db.Database.ExecuteSqlRaw("""ALTER TABLE "UserProfiles" ADD COLUMN IF NOT EXISTS "FeedingMethod" integer NULL;""");
+        db.Database.ExecuteSqlRaw("""ALTER TABLE "UserProfiles" ADD COLUMN IF NOT EXISTS "BirthOutcome" integer NULL;""");
+        db.Database.ExecuteSqlRaw("""ALTER TABLE "UserProfiles" ADD COLUMN IF NOT EXISTS "BabyName" text NULL;""");
+        db.Database.ExecuteSqlRaw("""ALTER TABLE "UserProfiles" ADD COLUMN IF NOT EXISTS "BabyDate" date NULL;""");
+        db.Database.ExecuteSqlRaw("""ALTER TABLE "UserProfiles" ADD COLUMN IF NOT EXISTS "DevicePairingToken" text NULL;""");
     }
 
     // Elder-care tables were added after BOTH the local janani.db AND the
@@ -474,7 +579,8 @@ using (var scope = app.Services.CreateScope())
             "TemperatureC" {decimalType} NULL,
             "OxygenSaturation" INTEGER NULL,
             "Notes" {textType} NULL,
-            "Source" {textType} NULL
+            "Source" {textType} NULL,
+            "DeviceReadingId" {textType} NULL
         );
         """);
     db.Database.ExecuteSqlRaw("""CREATE INDEX IF NOT EXISTS "IX_VitalsReadings_ElderProfileId" ON "VitalsReadings" ("ElderProfileId");""");
@@ -497,11 +603,20 @@ using (var scope = app.Services.CreateScope())
         }
         if (!VitalsColumnExists("Source"))
             db.Database.ExecuteSqlRaw("ALTER TABLE VitalsReadings ADD COLUMN Source TEXT NULL;");
+        if (!VitalsColumnExists("DeviceReadingId"))
+            db.Database.ExecuteSqlRaw("ALTER TABLE VitalsReadings ADD COLUMN DeviceReadingId TEXT NULL;");
     }
     else
     {
         db.Database.ExecuteSqlRaw("""ALTER TABLE "VitalsReadings" ADD COLUMN IF NOT EXISTS "Source" text NULL;""");
+        db.Database.ExecuteSqlRaw("""ALTER TABLE "VitalsReadings" ADD COLUMN IF NOT EXISTS "DeviceReadingId" text NULL;""");
     }
+
+    // Idempotency for device-uploaded readings: a retried upload of the same
+    // reading (same DeviceReadingId) must never create a second row. Partial
+    // (WHERE ... IS NOT NULL) so it never conflicts with the many manually
+    // entered readings that have none — identical syntax on both providers.
+    db.Database.ExecuteSqlRaw("""CREATE UNIQUE INDEX IF NOT EXISTS "IX_VitalsReadings_DeviceReadingId" ON "VitalsReadings" ("DeviceReadingId") WHERE "DeviceReadingId" IS NOT NULL;""");
 
     db.Database.ExecuteSqlRaw($"""
         CREATE TABLE IF NOT EXISTS "ElderCheckIns" (
@@ -661,21 +776,6 @@ using (var scope = app.Services.CreateScope())
     db.Database.ExecuteSqlRaw("""CREATE INDEX IF NOT EXISTS "IX_PushSubscriptions_UserId" ON "PushSubscriptions" ("UserId");""");
     db.Database.ExecuteSqlRaw("""CREATE UNIQUE INDEX IF NOT EXISTS "IX_PushSubscriptions_Token" ON "PushSubscriptions" ("Token");""");
 
-    db.Database.ExecuteSqlRaw($"""
-        CREATE TABLE IF NOT EXISTS "ConnectedEmailAccounts" (
-            {idColumn},
-            "UserId" INTEGER NOT NULL,
-            "Provider" {textType} NOT NULL,
-            "EncryptedAccessToken" {textType} NOT NULL,
-            "EncryptedRefreshToken" {textType} NOT NULL,
-            "ExpiresAt" {timestampType} NOT NULL,
-            "ConnectedAt" {timestampType} NOT NULL,
-            "LastSendFailed" {boolType} NOT NULL,
-            "LastSendError" {textType} NULL
-        );
-        """);
-    db.Database.ExecuteSqlRaw("""CREATE INDEX IF NOT EXISTS "IX_ConnectedEmailAccounts_UserId" ON "ConnectedEmailAccounts" ("UserId");""");
-    db.Database.ExecuteSqlRaw("""CREATE UNIQUE INDEX IF NOT EXISTS "IX_ConnectedEmailAccounts_UserId_Provider" ON "ConnectedEmailAccounts" ("UserId", "Provider");""");
 
     db.Database.ExecuteSqlRaw($"""
         CREATE TABLE IF NOT EXISTS "SharedCareAccess" (
@@ -715,6 +815,135 @@ using (var scope = app.Services.CreateScope())
         UPDATE "UserProfiles" SET "CaresForInfant" = {trueLiteral}
         WHERE EXISTS (SELECT 1 FROM "InfantProfiles" WHERE "InfantProfiles"."UserId" = "UserProfiles"."UserId");
         """);
+
+    // Pregnancy-side counterpart to VitalsReadings/Alerts — UserId-keyed
+    // (no separate shareable profile table for pregnancy, UserProfile is it)
+    // rather than ElderProfileId-keyed. See PregnancyVitalsReading/PregnancyAlert
+    // in Models.cs for why these are their own tables, not a widened Alerts.
+    db.Database.ExecuteSqlRaw($"""
+        CREATE TABLE IF NOT EXISTS "PregnancyVitalsReadings" (
+            {idColumn},
+            "UserId" INTEGER NOT NULL,
+            "RecordedAt" {timestampType} NOT NULL,
+            "SystolicBp" INTEGER NULL,
+            "DiastolicBp" INTEGER NULL,
+            "HeartRate" INTEGER NULL,
+            "TemperatureC" {decimalType} NULL,
+            "OxygenSaturation" INTEGER NULL,
+            "Notes" {textType} NULL,
+            "Source" {textType} NULL,
+            "DeviceReadingId" {textType} NULL
+        );
+        """);
+    db.Database.ExecuteSqlRaw("""CREATE INDEX IF NOT EXISTS "IX_PregnancyVitalsReadings_UserId" ON "PregnancyVitalsReadings" ("UserId");""");
+    db.Database.ExecuteSqlRaw("""CREATE INDEX IF NOT EXISTS "IX_PregnancyVitalsReadings_RecordedAt" ON "PregnancyVitalsReadings" ("RecordedAt");""");
+
+    // DeviceReadingId added after PregnancyVitalsReadings already existed —
+    // same ADD COLUMN dance as VitalsReadings (elder).
+    if (isSqlite)
+    {
+        bool PregnancyVitalsColumnExists(string column)
+        {
+            using var cmd = db.Database.GetDbConnection().CreateCommand();
+            cmd.CommandText = "PRAGMA table_info(\"PregnancyVitalsReadings\");";
+            if (cmd.Connection!.State != System.Data.ConnectionState.Open) cmd.Connection.Open();
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+                if (string.Equals(reader["name"]?.ToString(), column, StringComparison.OrdinalIgnoreCase))
+                    return true;
+            return false;
+        }
+        if (!PregnancyVitalsColumnExists("DeviceReadingId"))
+            db.Database.ExecuteSqlRaw("ALTER TABLE PregnancyVitalsReadings ADD COLUMN DeviceReadingId TEXT NULL;");
+    }
+    else
+    {
+        db.Database.ExecuteSqlRaw("""ALTER TABLE "PregnancyVitalsReadings" ADD COLUMN IF NOT EXISTS "DeviceReadingId" text NULL;""");
+    }
+    db.Database.ExecuteSqlRaw("""CREATE UNIQUE INDEX IF NOT EXISTS "IX_PregnancyVitalsReadings_DeviceReadingId" ON "PregnancyVitalsReadings" ("DeviceReadingId") WHERE "DeviceReadingId" IS NOT NULL;""");
+
+    db.Database.ExecuteSqlRaw($"""
+        CREATE TABLE IF NOT EXISTS "PregnancyAlerts" (
+            {idColumn},
+            "UserId" INTEGER NOT NULL,
+            "PregnancyVitalsReadingId" INTEGER NULL,
+            "Severity" INTEGER NOT NULL,
+            "Message" {textType} NOT NULL,
+            "TriggeredAt" {timestampType} NOT NULL,
+            "Acknowledged" {boolType} NOT NULL
+        );
+        """);
+    db.Database.ExecuteSqlRaw("""CREATE INDEX IF NOT EXISTS "IX_PregnancyAlerts_UserId" ON "PregnancyAlerts" ("UserId");""");
+    db.Database.ExecuteSqlRaw("""CREATE INDEX IF NOT EXISTS "IX_PregnancyAlerts_TriggeredAt" ON "PregnancyAlerts" ("TriggeredAt");""");
+
+    // Recovery-plan content itself is computed on read (see
+    // Services/RecoveryPlanGenerator.cs) -- this table only persists which
+    // items a mother has marked done, keyed by the item's stable string Key.
+    db.Database.ExecuteSqlRaw($"""
+        CREATE TABLE IF NOT EXISTS "RecoveryPlanItemCompletions" (
+            {idColumn},
+            "UserId" INTEGER NOT NULL,
+            "ItemKey" {textType} NOT NULL,
+            "CompletedAt" {timestampType} NOT NULL
+        );
+        """);
+    db.Database.ExecuteSqlRaw("""CREATE UNIQUE INDEX IF NOT EXISTS "IX_RecoveryPlanItemCompletions_UserId_ItemKey" ON "RecoveryPlanItemCompletions" ("UserId", "ItemKey");""");
+
+    // Daily postpartum check-in — see Services/PostpartumRecoveryChecker.cs.
+    db.Database.ExecuteSqlRaw($"""
+        CREATE TABLE IF NOT EXISTS "PostpartumCheckIns" (
+            {idColumn},
+            "UserId" INTEGER NOT NULL,
+            "CheckedAt" {timestampType} NOT NULL,
+            "PainLevel" INTEGER NOT NULL,
+            "Bleeding" INTEGER NOT NULL,
+            "TemperatureC" {decimalType} NULL,
+            "Wound" INTEGER NOT NULL,
+            "Mood" INTEGER NOT NULL,
+            "Notes" {textType} NULL
+        );
+        """);
+    db.Database.ExecuteSqlRaw("""CREATE INDEX IF NOT EXISTS "IX_PostpartumCheckIns_UserId" ON "PostpartumCheckIns" ("UserId");""");
+    db.Database.ExecuteSqlRaw("""CREATE INDEX IF NOT EXISTS "IX_PostpartumCheckIns_CheckedAt" ON "PostpartumCheckIns" ("CheckedAt");""");
+
+    // Fed by either PostpartumRecoveryChecker (daily check-in) or
+    // EpdsScreeningChecker (EPDS-10) — exactly one of the two FKs is set.
+    db.Database.ExecuteSqlRaw($"""
+        CREATE TABLE IF NOT EXISTS "PostpartumAlerts" (
+            {idColumn},
+            "UserId" INTEGER NOT NULL,
+            "PostpartumCheckInId" INTEGER NULL,
+            "EpdsScreeningId" INTEGER NULL,
+            "Severity" INTEGER NOT NULL,
+            "Message" {textType} NOT NULL,
+            "TriggeredAt" {timestampType} NOT NULL,
+            "Acknowledged" {boolType} NOT NULL
+        );
+        """);
+    db.Database.ExecuteSqlRaw("""CREATE INDEX IF NOT EXISTS "IX_PostpartumAlerts_UserId" ON "PostpartumAlerts" ("UserId");""");
+    db.Database.ExecuteSqlRaw("""CREATE INDEX IF NOT EXISTS "IX_PostpartumAlerts_TriggeredAt" ON "PostpartumAlerts" ("TriggeredAt");""");
+
+    // Edinburgh Postnatal Depression Scale — see EpdsScreeningChecker.cs.
+    db.Database.ExecuteSqlRaw($"""
+        CREATE TABLE IF NOT EXISTS "EpdsScreenings" (
+            {idColumn},
+            "UserId" INTEGER NOT NULL,
+            "AdministeredAt" {timestampType} NOT NULL,
+            "ScheduledDay" INTEGER NOT NULL,
+            "Item1" INTEGER NOT NULL,
+            "Item2" INTEGER NOT NULL,
+            "Item3" INTEGER NOT NULL,
+            "Item4" INTEGER NOT NULL,
+            "Item5" INTEGER NOT NULL,
+            "Item6" INTEGER NOT NULL,
+            "Item7" INTEGER NOT NULL,
+            "Item8" INTEGER NOT NULL,
+            "Item9" INTEGER NOT NULL,
+            "Item10" INTEGER NOT NULL
+        );
+        """);
+    db.Database.ExecuteSqlRaw("""CREATE INDEX IF NOT EXISTS "IX_EpdsScreenings_UserId" ON "EpdsScreenings" ("UserId");""");
+    db.Database.ExecuteSqlRaw("""CREATE INDEX IF NOT EXISTS "IX_EpdsScreenings_AdministeredAt" ON "EpdsScreenings" ("AdministeredAt");""");
 
     SeedDemoAccount(db);
 }
@@ -876,8 +1105,8 @@ void SeedDemoAccount(AppDbContext db)
 // Cloud Run terminates TLS at its edge and forwards to the container over
 // plain HTTP, so without this, every Request.Scheme/NavigationManager.Uri in
 // the app reads "http" even for a real https:// visitor — that's already
-// worked around locally for the OAuth redirect URIs below (see
-// BuildCalendarRedirectUri/BuildEmailRedirectUri), but nothing previously
+// worked around locally for the OAuth redirect URI below (see
+// BuildCalendarRedirectUri), but nothing previously
 // fixed it globally. The concrete symptom: after login, NavigateTo(ReturnUrl,
 // forceLoad:true) rebuilt ReturnUrl as "http://..." — invisible in a normal
 // browser (same tab either way), but the Capacitor Android app's WebViewClient
@@ -949,7 +1178,7 @@ app.MapGet("/health", async (AgentHealthService healthService, CancellationToken
 // ── Pub/Sub Push Endpoint ────────────────────────────────────────────────────
 // Cloud Pub/Sub push subscriptions POST here when agent events are delivered.
 // Verify the bearer token matches PUBSUB_VERIFICATION_TOKEN to reject forgeries.
-app.MapPost("/api/events/pubsub", async (HttpContext ctx, ILogger<Program> log) =>
+app.MapPost("/api/events/pubsub", async (HttpContext ctx, PushNotificationService pushNotifications, ILogger<Program> log) =>
 {
     // Trim: Secret Manager values can pick up a trailing newline depending
     // on how they were written, which would otherwise make this exact-match
@@ -972,6 +1201,20 @@ app.MapPost("/api/events/pubsub", async (HttpContext ctx, ILogger<Program> log) 
         var decoded = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(data));
         var attrs = messageEl.TryGetProperty("attributes", out var a) ? a.ToString() : "{}";
         log.LogInformation("Pub/Sub push received — EventType: {Attrs} Payload: {Data}", attrs, decoded);
+
+        // Every push subscription (mood/meal/birthplan/journal + alert-events)
+        // lands here -- only alert-notification actually needs to do
+        // anything; the rest keep the log-only behavior above.
+        using var eventDoc = JsonDocument.Parse(decoded);
+        var eventType = eventDoc.RootElement.TryGetProperty("EventType", out var et) ? et.GetString() : null;
+        if (eventType == "alert-notification" && eventDoc.RootElement.TryGetProperty("Payload", out var payloadEl))
+        {
+            var payload = payloadEl.Deserialize<AlertNotificationPayload>();
+            if (payload != null)
+            {
+                await pushNotifications.NotifyUserAsync(payload.UserId, payload.Title, payload.Body, payload.Scope, payload.InfantProfileId);
+            }
+        }
     }
     catch (Exception ex)
     {
@@ -1008,6 +1251,116 @@ app.MapPost("/api/push/register", async (HttpContext ctx, AppDbContext db, Cance
 
     return Results.NoContent();
 }).RequireAuthorization();
+
+// ── Device vitals ingest ─────────────────────────────────────────────────────
+// Elder-care edge devices (real or simulated — see edge-device-sim/) POST
+// readings here, in capture order, once back online. AllowAnonymous since a
+// device can't hold a login session; guarded instead by an optional
+// shared-secret token, same pattern as PUBSUB_VERIFICATION_TOKEN above.
+app.MapPost("/api/elders/{elderId:int}/vitals", async (
+    int elderId, HttpContext ctx, AppDbContext db, VitalsIngestService vitalsIngest,
+    IElderDeviceAuthenticator deviceAuth, CancellationToken ct) =>
+{
+    var presentedToken = ctx.Request.Query["token"].ToString();
+    if (!await deviceAuth.AuthorizeAsync(elderId, presentedToken, ct))
+        return Results.StatusCode(403);
+
+    var elder = await db.ElderProfiles.FindAsync([elderId], ct);
+    if (elder == null) return Results.NotFound();
+
+    var body = await ctx.Request.ReadFromJsonAsync<DeviceVitalsRequest>(ct);
+    if (body == null) return Results.BadRequest();
+
+    // No Blazor circuit/ProfileCache here — look up the owning caregiver's
+    // language directly, same field the Razor page reads via ProfileCache.
+    var language = await db.UserProfiles.AsNoTracking()
+        .Where(p => p.UserId == elder.UserId)
+        .Select(p => p.Language)
+        .FirstOrDefaultAsync(ct);
+
+    var reading = new VitalsReading
+    {
+        ElderProfileId = elder.Id,
+        // .ToUniversalTime(): System.Text.Json deserializes a DateTime string
+        // carrying an explicit offset (e.g. Python's isoformat() "+00:00")
+        // with Kind=Local, not Kind=Utc -- Npgsql then rejects it outright
+        // for a "timestamp with time zone" column ("Cannot write DateTime
+        // with Kind=Local..."). This doesn't shift the instant, just corrects
+        // the Kind tag.
+        RecordedAt = body.CapturedAt?.ToUniversalTime() ?? DateTime.UtcNow,
+        SystolicBp = body.SystolicBp,
+        DiastolicBp = body.DiastolicBp,
+        HeartRate = body.HeartRate,
+        TemperatureC = body.TemperatureC,
+        OxygenSaturation = body.OxygenSaturation,
+        Notes = body.Notes,
+        Source = body.Source,
+        DeviceReadingId = body.DeviceReadingId
+    };
+
+    var result = await vitalsIngest.IngestAsync(elder, reading, language, ct);
+    return Results.Ok(new
+    {
+        duplicate = result.Duplicate,
+        alertRaised = result.AlertRaised,
+        severity = result.Severity?.ToString()
+    });
+}).AllowAnonymous();
+
+// ── Device vitals ingest — pregnancy ─────────────────────────────────────────
+// Unlike the elder endpoint above, there's no ElderProfileId-style indirection
+// for pregnancy — UserId is the real login-capable account. A single global
+// shared secret would let anyone holding it inject fake Critical alerts at
+// any user by guessing an id, so this is per-user instead: the caller proves
+// it belongs to a specific account by presenting THAT account's own
+// UserProfile.DevicePairingToken (generated in Settings), not one shared
+// DEVICE_INGEST_TOKEN. Still AllowAnonymous since a device has no login
+// session — the pairing token is the auth.
+app.MapPost("/api/pregnancy/vitals", async (
+    HttpContext ctx, AppDbContext db, PregnancyVitalsIngestService vitalsIngest,
+    IPregnancyDeviceAuthenticator deviceAuth, CancellationToken ct) =>
+{
+    var body = await ctx.Request.ReadFromJsonAsync<PregnancyDeviceVitalsRequest>(ct);
+    if (body == null) return Results.BadRequest();
+
+    var profile = await db.UserProfiles.FirstOrDefaultAsync(p => p.UserId == body.UserId, ct);
+    if (profile == null) return Results.NotFound();
+
+    if (!await deviceAuth.AuthorizeAsync(body.UserId, body.PairingToken, ct))
+        return Results.StatusCode(403);
+
+    var reading = new PregnancyVitalsReading
+    {
+        UserId = body.UserId,
+        // .ToUniversalTime(): System.Text.Json deserializes a DateTime string
+        // carrying an explicit offset (e.g. Python's isoformat() "+00:00")
+        // with Kind=Local, not Kind=Utc -- Npgsql then rejects it outright
+        // for a "timestamp with time zone" column ("Cannot write DateTime
+        // with Kind=Local..."). This doesn't shift the instant, just corrects
+        // the Kind tag.
+        RecordedAt = body.CapturedAt?.ToUniversalTime() ?? DateTime.UtcNow,
+        SystolicBp = body.SystolicBp,
+        DiastolicBp = body.DiastolicBp,
+        HeartRate = body.HeartRate,
+        TemperatureC = body.TemperatureC,
+        OxygenSaturation = body.OxygenSaturation,
+        Notes = body.Notes,
+        Source = body.Source,
+        DeviceReadingId = body.DeviceReadingId
+    };
+
+    var userName = string.IsNullOrWhiteSpace(profile.Name) ? "Mama" : profile.Name;
+    var result = await vitalsIngest.IngestAsync(
+        body.UserId, userName, profile.CurrentWeek, reading, profile.Language,
+        profile.DoctorName, profile.DoctorEmail, ct);
+
+    return Results.Ok(new
+    {
+        duplicate = result.Duplicate,
+        alertRaised = result.AlertRaised,
+        severity = result.Severity?.ToString()
+    });
+}).AllowAnonymous();
 
 // ── Google Calendar Sync — OAuth endpoints ────────────────────────────────────
 // Same reasoning as /account/logout above: the authorization-code redirect
@@ -1078,70 +1431,17 @@ app.MapGet("/calendar/disconnect/google", async (HttpContext ctx, ICalendarSyncS
     return Results.Redirect("/settings?calendar=disconnected");
 }).RequireAuthorization();
 
-// ── Doctor alert email — OAuth endpoints ──────────────────────────────────────
-// Same shape as the Calendar OAuth endpoints above, deliberately a separate
-// state cookie/redirect URI/consent flow — see EmailNotificationService for
-// why this isn't just folded into the Calendar connection.
-const string EmailOAuthStateCookie = "Janani.EmailOAuthState";
-
-static string BuildEmailRedirectUri(HttpContext ctx)
-{
-    var scheme = ctx.Request.Headers["X-Forwarded-Proto"].FirstOrDefault() ?? ctx.Request.Scheme;
-    return $"{scheme}://{ctx.Request.Host}/email-alerts/callback/google";
-}
-
-app.MapGet("/email-alerts/connect/google", (HttpContext ctx, IEmailNotificationService emailNotifications) =>
-{
-    var state = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
-    ctx.Response.Cookies.Append(EmailOAuthStateCookie, state, new CookieOptions
-    {
-        HttpOnly = true,
-        Secure = true,
-        SameSite = SameSiteMode.Lax,
-        Expires = DateTimeOffset.UtcNow.AddMinutes(10)
-    });
-
-    var redirectUri = BuildEmailRedirectUri(ctx);
-    try
-    {
-        return Results.Redirect(emailNotifications.BuildAuthorizationUrl(state, redirectUri));
-    }
-    catch (InvalidOperationException)
-    {
-        return Results.Redirect("/settings?emailAlerts=error");
-    }
-}).RequireAuthorization();
-
-app.MapGet("/email-alerts/callback/google", async (HttpContext ctx, IEmailNotificationService emailNotifications, CancellationToken ct) =>
-{
-    var expectedState = ctx.Request.Cookies[EmailOAuthStateCookie];
-    ctx.Response.Cookies.Delete(EmailOAuthStateCookie);
-
-    var returnedState = ctx.Request.Query["state"].ToString();
-    var code = ctx.Request.Query["code"].ToString();
-    if (string.IsNullOrEmpty(expectedState) || returnedState != expectedState || string.IsNullOrEmpty(code))
-        return Results.Redirect("/settings?emailAlerts=error");
-
-    var userId = int.Parse(ctx.User.FindFirst(ClaimTypes.NameIdentifier)!.Value);
-    var redirectUri = BuildEmailRedirectUri(ctx);
-    try
-    {
-        await emailNotifications.CompleteConnectionAsync(userId, code, redirectUri, ct);
-        return Results.Redirect("/settings?emailAlerts=connected");
-    }
-    catch (Exception)
-    {
-        return Results.Redirect("/settings?emailAlerts=error");
-    }
-}).RequireAuthorization();
-
-app.MapGet("/email-alerts/disconnect/google", async (HttpContext ctx, IEmailNotificationService emailNotifications, CancellationToken ct) =>
-{
-    var userId = int.Parse(ctx.User.FindFirst(ClaimTypes.NameIdentifier)!.Value);
-    await emailNotifications.DisconnectAsync(userId, ct);
-    return Results.Redirect("/settings?emailAlerts=disconnected");
-}).RequireAuthorization();
-
 app.Run();
 
 record PushRegisterRequest(string Token);
+
+record DeviceVitalsRequest(
+    int? SystolicBp, int? DiastolicBp, int? HeartRate, decimal? TemperatureC,
+    int? OxygenSaturation, string? Notes, string? Source,
+    DateTime? CapturedAt, string? DeviceReadingId);
+
+record PregnancyDeviceVitalsRequest(
+    int UserId, string PairingToken,
+    int? SystolicBp, int? DiastolicBp, int? HeartRate, decimal? TemperatureC,
+    int? OxygenSaturation, string? Notes, string? Source,
+    DateTime? CapturedAt, string? DeviceReadingId);

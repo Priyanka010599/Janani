@@ -10,6 +10,7 @@
 @inject PushNotificationService PushNotifications
 @inject IEmailNotificationService EmailNotifications
 @inject CareAccessService CareAccess
+@inject NavigationManager Nav
 @implements IDisposable
 @rendermode InteractiveServer
 
@@ -281,12 +282,26 @@
 
     private int _currentUserId;
     private string _language = "English";
+    private CareContext _careContext = new(null);
 
     protected override async Task OnInitializedAsync()
     {
         _currentUserId = await CurrentUser.GetUserIdAsync();
         var profile = await ProfileCache.GetAsync();
         _language = (profile?.Language ?? AppLanguage.English).ToString();
+        _careContext = profile?.CareContext ?? new CareContext(null);
+
+        // Unreachable, not just hidden — a bereaved profile with no
+        // surviving infant is redirected away even on a direct URL visit,
+        // not merely kept off the nav (see NavMenu.razor for the nav side
+        // of this same gate). PartialLossMultiple stays reachable — its
+        // surviving child's own data still lives here.
+        if (_careContext.SuppressInfantContent)
+        {
+            Nav.NavigateTo("/", forceLoad: true);
+            return;
+        }
+
         await LoadInfantsAsync();
     }
 
@@ -410,7 +425,7 @@
         var given = await Db.VaccinationRecords.AsNoTracking()
             .Where(v => v.InfantProfileId == _selectedInfant.Id)
             .ToListAsync();
-        _vaccineStatuses = VaccinationSchedule.BuildStatus(_selectedInfant.AgeInWeeks, given)
+        _vaccineStatuses = VaccinationSchedule.BuildStatus(_selectedInfant.AgeInWeeks, given, suppressed: _careContext.SuppressInfantContent)
             .OrderBy(v => v.Status switch
             {
                 VaccinationStatus.Overdue => 0,
@@ -564,7 +579,7 @@
             var caregiverIds = await CareAccess.GetCaregiverUserIdsForInfantAsync(_selectedInfant.Id);
             foreach (var caregiverId in caregiverIds)
             {
-                await PushNotifications.NotifyUserAsync(caregiverId, $"{prefix} {_selectedInfant.Name} — growth concern", alert.Message);
+                await PushNotifications.NotifyUserViaPubSubAsync(caregiverId, $"{prefix} {_selectedInfant.Name} — growth concern", alert.Message, "infant-checker", NotificationScope.Infant, infantProfileId: _selectedInfant.Id);
             }
 
             // Only Critical escalates to the doctor by email, sent once via
@@ -574,10 +589,16 @@
                 var subject = $"Urgent: {_selectedInfant.Name} may need attention (via Janani)";
                 var body = $"{alert.Message}\n\nThis is an automated alert from Janani, a family caregiving app, " +
                            $"sent on behalf of {_selectedInfant.Name}'s caregiver because a critical concern was flagged.";
-                foreach (var caregiverId in caregiverIds)
+                var doctorLabel = _selectedInfant.DoctorName ?? "Doctor";
+                var doctorEmailSent = await EmailNotifications.SendDoctorAlertAsync(_selectedInfant.DoctorEmail!, doctorLabel, subject, body);
+                if (!doctorEmailSent)
                 {
-                    if (await EmailNotifications.SendDoctorAlertAsync(caregiverId, _selectedInfant.DoctorEmail!, _selectedInfant.DoctorName ?? "Doctor", subject, body))
-                        break;
+                    foreach (var caregiverId in caregiverIds)
+                    {
+                        await PushNotifications.NotifyUserViaPubSubAsync(caregiverId, $"⚠️ Couldn't email {doctorLabel}",
+                            $"The automatic alert email to {doctorLabel} about {_selectedInfant.Name} failed to send — please contact them directly.",
+                            "infant-checker", NotificationScope.Infant, infantProfileId: _selectedInfant.Id);
+                    }
                 }
             }
         }

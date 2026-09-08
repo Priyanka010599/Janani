@@ -16,8 +16,6 @@ namespace Janani.Services;
 
 public static class VitalsThresholdChecker
 {
-    public record Concern(string Description, AlertSeverity Severity);
-
     public static List<Concern> Check(VitalsReading v)
     {
         var concerns = new List<Concern>();
