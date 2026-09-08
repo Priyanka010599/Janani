@@ -42,9 +42,12 @@ public class UserProfileCache(IDbContextFactory<AppDbContext> dbFactory, Current
         return _profile;
     }
 
+    public event Action? Changed;
+
     public void Invalidate()
     {
         _profile = null;
         _pendingFetch = null;
+        Changed?.Invoke();
     }
 }

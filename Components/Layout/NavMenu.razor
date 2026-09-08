@@ -1,5 +1,6 @@
 @inject NavigationManager Nav
 @inject Janani.Services.UserProfileCache ProfileCache
+@implements IDisposable
 
 <div class="navbar">
     <a class="navbar-brand" href="/">🌸 Janani</a>
@@ -105,6 +106,23 @@
         var authState = await AuthStateTask;
         if (authState.User.Identity?.IsAuthenticated != true) return;
 
+        await RefreshProfileFlagsAsync();
+        ProfileCache.Changed += OnProfileChanged;
+    }
+
+    // Profile.razor invalidates the shared cache after a save (e.g.
+    // toggling elder/infant care or pregnancy tracking) — without this,
+    // the flags below would only be re-read the next time this component
+    // is created (new circuit / hard refresh), leaving the nav stale for
+    // the rest of the current session.
+    private void OnProfileChanged() => InvokeAsync(async () =>
+    {
+        await RefreshProfileFlagsAsync();
+        StateHasChanged();
+    });
+
+    private async Task RefreshProfileFlagsAsync()
+    {
         // Routed through the shared cache (not a direct DbContext query) —
         // NavMenu renders alongside every page's own profile fetch in the
         // same circuit, and the cache is what makes concurrent callers share
@@ -115,6 +133,8 @@
         _caresForInfant = profile?.CaresForInfant ?? false;
         _language = (profile?.Language ?? Janani.Services.AppLanguage.English).ToString();
     }
+
+    public void Dispose() => ProfileCache.Changed -= OnProfileChanged;
 
     private void Logout() => Nav.NavigateTo("/account/logout", forceLoad: true);
 

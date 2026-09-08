@@ -16,12 +16,6 @@
         <p class="subtitle">@T("Subtitle")</p>
     </div>
 
-    @if (_saved)
-    {
-        <div class="sos-safety-note">
-            <p>💗 @T("Saved")</p>
-        </div>
-    }
     @if (_error != null)
     {
         <div class="meal-gentle-note error-note"><p>💗 @_error</p></div>
@@ -101,6 +95,10 @@
                 <button class="bloom-btn primary" @onclick="SaveAsync" disabled="@string.IsNullOrWhiteSpace(_name)">
                     @T("SaveChangesButton")
                 </button>
+                @if (_justSaved)
+                {
+                    <span class="sos-hint">✅ @T("Saved")</span>
+                }
             </div>
         </div>
     }
@@ -117,8 +115,8 @@
     private bool _caresForInfant;
     private AppLanguage _language;
     private string _uiLanguage = "English";
-    private bool _saved;
     private string? _error;
+    private bool _justSaved;
 
     protected override async Task OnInitializedAsync()
     {
@@ -143,7 +141,7 @@
     {
         if (_profile == null || string.IsNullOrWhiteSpace(_name)) return;
         _error = null;
-        _saved = false;
+        _justSaved = false;
 
         try
         {
@@ -159,8 +157,13 @@
             }
             await Db.SaveChangesAsync();
 
+            // NavMenu (and any other layout-level state) only reads the
+            // profile once when its component is first created in this
+            // circuit -- Invalidate() now raises UserProfileCache.Changed,
+            // which NavMenu subscribes to so it re-reads and re-renders
+            // itself instead of needing a full page reload here.
             ProfileCache.Invalidate();
-            _saved = true;
+            _justSaved = true;
         }
         catch (Exception)
         {

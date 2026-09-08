@@ -1,0 +1,348 @@
+@page "/journey"
+@using Janani.Models
+@using Janani.Data
+@using Janani.Services
+@using Microsoft.EntityFrameworkCore
+@inject AppDbContext Db
+@inject CurrentUserService CurrentUser
+@inject UserProfileCache ProfileCache
+@inject CareAccessService CareAccess
+@rendermode InteractiveServer
+
+<PageTitle>Janani — Journey</PageTitle>
+
+<div class="bloom-container">
+    <div class="section-header">
+        <h1>🧭 @T("Title")</h1>
+        <p class="subtitle">@T("Subtitle")</p>
+    </div>
+
+    @if (_stages.Count > 0)
+    {
+        <div class="contact-list">
+            @foreach (var s in _stages)
+            {
+                <a class="contact-card @s.CardClass" href="@s.Link">
+                    <div class="contact-info">
+                        <strong>@s.Icon @s.Name</strong>
+                        <span class="contact-relation">@s.Subtitle</span>
+                    </div>
+                    <span class="family-status @(s.HasAlert ? "alert" : "")">@s.Status</span>
+                </a>
+            }
+        </div>
+    }
+    else
+    {
+        <div class="empty-state">
+            <p>@T("EmptyTitle")</p>
+            <p>@T("EmptyHint")</p>
+        </div>
+    }
+
+    <h3 class="list-section-title">⏳ @T("NextUpHeading")</h3>
+    @if (_nextUp.Count > 0)
+    {
+        <div class="contact-list">
+            @foreach (var item in _nextUp)
+            {
+                <a class="contact-card @(item.Urgent ? "is-alert-critical" : "")" href="@item.Link">
+                    <div class="contact-info">
+                        <strong>@item.Icon @item.Title</strong>
+                    </div>
+                    <span class="family-status @(item.Urgent ? "alert" : "")">@item.WhenLabel</span>
+                </a>
+            }
+        </div>
+    }
+    else
+    {
+        <div class="empty-state">
+            <p>@T("EmptyNextUp")</p>
+        </div>
+    }
+
+    <h3 class="list-section-title">✅ @T("RecentlyDoneHeading")</h3>
+    @if (_recentlyDone.Count > 0)
+    {
+        <div class="contact-list">
+            @foreach (var item in _recentlyDone)
+            {
+                <a class="contact-card" href="@item.Link">
+                    <div class="contact-info">
+                        <strong>@item.Icon @item.Title</strong>
+                    </div>
+                    <span class="family-status">@item.WhenLabel</span>
+                </a>
+            }
+        </div>
+    }
+    else
+    {
+        <div class="empty-state">
+            <p>@T("EmptyRecent")</p>
+        </div>
+    }
+</div>
+
+@code {
+    // Mirrors FamilyCare.razor's FamilySnapshot shape — this row is a
+    // "where things currently stand" header per active domain, not a
+    // duplicate of Family Care's live-status page: the real new value here
+    // is NextUp/RecentlyDone below, which Family Care doesn't have at all.
+    private record StageCard(string Icon, string Name, string Subtitle, string Status, bool HasAlert, string CardClass, string Link);
+
+    // WhenLabel is pre-formatted at add-time (either "X ago" for something
+    // already logged, or a due-date/age-label for something pending) so the
+    // markup never has to branch on which kind of item this is.
+    private record JourneyItem(string Icon, string Title, string WhenLabel, DateTime SortKey, string Link, bool Urgent);
+
+    private List<StageCard> _stages = [];
+    private List<JourneyItem> _nextUp = [];
+    private List<JourneyItem> _recentlyDone = [];
+    private string _language = "English";
+
+    protected override async Task OnInitializedAsync()
+    {
+        var profile = await ProfileCache.GetAsync();
+        _language = (profile?.Language ?? AppLanguage.English).ToString();
+        var userId = await CurrentUser.GetUserIdAsync();
+
+        var stages = new List<StageCard>();
+        var nextUp = new List<JourneyItem>();
+        var recentlyDone = new List<JourneyItem>();
+
+        if (profile?.TracksPregnancy == true)
+        {
+            var lastMood = await Db.MoodCheckIns.AsNoTracking()
+                .Where(m => m.UserId == userId)
+                .OrderByDescending(m => m.CheckedAt)
+                .FirstOrDefaultAsync();
+            var moodStatus = lastMood != null ? $"{T("LastCheckIn")} {FormatAgo(lastMood.CheckedAt)}" : T("NoCheckInYet");
+            var pregAlert = await Db.PregnancyAlerts.AsNoTracking()
+                .Where(a => a.UserId == userId && !a.Acknowledged)
+                .OrderByDescending(a => a.TriggeredAt)
+                .FirstOrDefaultAsync();
+            var pregCardClass = pregAlert == null ? "" : pregAlert.Severity == AlertSeverity.Critical ? "is-alert-critical" : "is-alert-warning";
+            stages.Add(new StageCard("🌸", profile.Name, $"{T("Week")} {profile.CurrentWeek} {T("Of40")}",
+                pregAlert != null ? pregAlert.Message : moodStatus, pregAlert != null, pregCardClass, "/"));
+
+            if (pregAlert != null)
+                nextUp.Add(new JourneyItem(pregAlert.Severity == AlertSeverity.Critical ? "🚨" : "⚠️", pregAlert.Message,
+                    FormatAgo(pregAlert.TriggeredAt), pregAlert.TriggeredAt, "/vitals", pregAlert.Severity == AlertSeverity.Critical));
+
+            if (lastMood != null)
+                recentlyDone.Add(new JourneyItem("💗", T("MoodCheckInLogged"), FormatAgo(lastMood.CheckedAt), lastMood.CheckedAt, "/", false));
+
+            var lastJournal = await Db.JournalEntries.AsNoTracking()
+                .Where(j => j.UserId == userId)
+                .OrderByDescending(j => j.CreatedAt)
+                .FirstOrDefaultAsync();
+            if (lastJournal != null)
+                recentlyDone.Add(new JourneyItem("📔", T("JournalEntryLogged"), FormatAgo(lastJournal.CreatedAt), lastJournal.CreatedAt, "/journal", false));
+
+            var lastPregVitals = await Db.PregnancyVitalsReadings.AsNoTracking()
+                .Where(v => v.UserId == userId)
+                .OrderByDescending(v => v.RecordedAt)
+                .FirstOrDefaultAsync();
+            if (lastPregVitals != null)
+                recentlyDone.Add(new JourneyItem("🩺", T("VitalsLoggedItem"), FormatAgo(lastPregVitals.RecordedAt), lastPregVitals.RecordedAt, "/vitals", false));
+        }
+
+        var accessibleElderIds = await CareAccess.GetAccessibleElderIdsAsync(userId);
+        var elders = await Db.ElderProfiles.AsNoTracking()
+            .Where(e => accessibleElderIds.Contains(e.Id))
+            .OrderBy(e => e.Name)
+            .ToListAsync();
+        foreach (var elder in elders)
+        {
+            var lastVitals = await Db.VitalsReadings.AsNoTracking()
+                .Where(v => v.ElderProfileId == elder.Id)
+                .OrderByDescending(v => v.RecordedAt)
+                .FirstOrDefaultAsync();
+            var openAlerts = await Db.Alerts.AsNoTracking()
+                .Where(a => a.ElderProfileId == elder.Id && !a.Acknowledged)
+                .OrderByDescending(a => a.TriggeredAt)
+                .ToListAsync();
+
+            var status = openAlerts.Count > 0
+                ? $"🚨 {openAlerts.Count} {T("OpenAlerts")}"
+                : lastVitals != null ? $"{T("VitalsLogged")} {FormatAgo(lastVitals.RecordedAt)}" : T("NoVitalsYet");
+            var cardClass = openAlerts.Count == 0 ? "" : openAlerts.Any(a => a.Severity == AlertSeverity.Critical) ? "is-alert-critical" : "is-alert-warning";
+            stages.Add(new StageCard("🌼", elder.Name, elder.Relation, status, openAlerts.Count > 0, cardClass, "/elder-care"));
+
+            if (lastVitals != null)
+                recentlyDone.Add(new JourneyItem("🩺", string.Format(T("VitalsLoggedFor"), elder.Name), FormatAgo(lastVitals.RecordedAt), lastVitals.RecordedAt, "/elder-care", false));
+
+            foreach (var alert in openAlerts)
+                nextUp.Add(new JourneyItem(alert.Severity == AlertSeverity.Critical ? "🚨" : "⚠️", alert.Message,
+                    FormatAgo(alert.TriggeredAt), alert.TriggeredAt, "/elder-care", alert.Severity == AlertSeverity.Critical));
+        }
+
+        var accessibleInfantIds = await CareAccess.GetAccessibleInfantIdsAsync(userId);
+        var infants = await Db.InfantProfiles.AsNoTracking()
+            .Where(i => accessibleInfantIds.Contains(i.Id))
+            .OrderBy(i => i.Name)
+            .ToListAsync();
+        foreach (var infant in infants)
+        {
+            var given = await Db.VaccinationRecords.AsNoTracking()
+                .Where(v => v.InfantProfileId == infant.Id)
+                .ToListAsync();
+            var vaccineStatuses = VaccinationSchedule.BuildStatus(infant.AgeInWeeks, given);
+            var dueVaccines = vaccineStatuses.Where(v => v.Status is VaccinationStatus.Overdue or VaccinationStatus.DueNow).ToList();
+            var lastGrowth = await Db.GrowthEntries.AsNoTracking()
+                .Where(g => g.InfantProfileId == infant.Id)
+                .OrderByDescending(g => g.RecordedAt)
+                .FirstOrDefaultAsync();
+
+            var status = dueVaccines.Count > 0
+                ? $"🚨 {dueVaccines.Count} {T("VaccinesDue")}"
+                : lastGrowth != null ? $"{T("GrowthLogged")} {FormatAgo(lastGrowth.RecordedAt)}" : T("NoGrowthYet");
+            var cardClass = dueVaccines.Count == 0 ? "" : dueVaccines.Any(v => v.Status == VaccinationStatus.Overdue) ? "is-alert-critical" : "is-alert-warning";
+            stages.Add(new StageCard("👶", infant.Name, $"{infant.AgeInWeeks} {T("WeeksOld")}", status, dueVaccines.Count > 0, cardClass, "/infant-care"));
+
+            if (lastGrowth != null)
+                recentlyDone.Add(new JourneyItem("📏", string.Format(T("GrowthLoggedFor"), infant.Name), FormatAgo(lastGrowth.RecordedAt), lastGrowth.RecordedAt, "/infant-care", false));
+
+            foreach (var v in vaccineStatuses.Where(v => v.Status == VaccinationStatus.Given && v.GivenAt.HasValue))
+                recentlyDone.Add(new JourneyItem("💉", $"{v.Vaccine.Name} — {infant.Name}", FormatAgo(v.GivenAt!.Value), v.GivenAt.Value, "/infant-care", false));
+
+            foreach (var v in dueVaccines)
+            {
+                var dueDate = infant.DateOfBirth.ToDateTime(TimeOnly.MinValue).AddDays(v.Vaccine.DueAtWeeks * 7);
+                nextUp.Add(new JourneyItem(v.Status == VaccinationStatus.Overdue ? "🚨" : "⚠️", $"{v.Vaccine.Name} — {infant.Name}",
+                    v.Vaccine.AgeLabel, dueDate, "/infant-care", v.Status == VaccinationStatus.Overdue));
+            }
+
+            var growthAlerts = await Db.InfantAlerts.AsNoTracking()
+                .Where(a => a.InfantProfileId == infant.Id && !a.Acknowledged)
+                .OrderByDescending(a => a.TriggeredAt)
+                .ToListAsync();
+            foreach (var alert in growthAlerts)
+                nextUp.Add(new JourneyItem(alert.Severity == AlertSeverity.Critical ? "🚨" : "⚠️", alert.Message,
+                    FormatAgo(alert.TriggeredAt), alert.TriggeredAt, "/infant-care", alert.Severity == AlertSeverity.Critical));
+        }
+
+        // Appointments aren't scoped to a specific elder/infant profile (only
+        // UserId) — one shared list rather than attributed per-dependent.
+        var appointments = await Db.Appointments.AsNoTracking()
+            .Where(a => a.UserId == userId)
+            .ToListAsync();
+        foreach (var appt in appointments.Where(a => !a.Completed).OrderBy(a => a.AppointmentDate))
+            nextUp.Add(new JourneyItem("📅", appt.Title, appt.AppointmentDate.ToString("MMM d, yyyy"), appt.AppointmentDate, "/appointments", false));
+        foreach (var appt in appointments.Where(a => a.Completed).OrderByDescending(a => a.AppointmentDate))
+            recentlyDone.Add(new JourneyItem("📅", appt.Title, appt.AppointmentDate.ToString("MMM d, yyyy"), appt.AppointmentDate, "/appointments", false));
+
+        _stages = stages;
+        _nextUp = nextUp.OrderByDescending(i => i.Urgent).ThenBy(i => i.SortKey).Take(8).ToList();
+        _recentlyDone = recentlyDone.OrderByDescending(i => i.SortKey).Take(8).ToList();
+    }
+
+    private string FormatAgo(DateTime at)
+    {
+        var span = DateTime.UtcNow - at;
+        if (span.TotalMinutes < 60) return $"{(int)span.TotalMinutes}{T("MinAgo")}";
+        if (span.TotalHours < 24) return $"{(int)span.TotalHours}{T("HourAgo")}";
+        return $"{(int)span.TotalDays}{T("DayAgo")}";
+    }
+
+    private static readonly Dictionary<string, Dictionary<string, string>> Strings = new()
+    {
+        ["English"] = new()
+        {
+            ["Title"] = "Journey",
+            ["Subtitle"] = "Everything you're tracking, brought into one place — what's done, what needs attention, and what's next.",
+            ["EmptyTitle"] = "Nothing tracked yet 🌷",
+            ["EmptyHint"] = "Start a pregnancy check-in, or add someone from Elder Care or Infant Care, to see your journey here.",
+            ["NextUpHeading"] = "Next up",
+            ["EmptyNextUp"] = "Nothing pending right now 🎉",
+            ["RecentlyDoneHeading"] = "Recently completed",
+            ["EmptyRecent"] = "Nothing logged yet",
+            ["Week"] = "Week",
+            ["Of40"] = "of 40",
+            ["LastCheckIn"] = "Last check-in",
+            ["NoCheckInYet"] = "No check-in yet",
+            ["MoodCheckInLogged"] = "Mood check-in logged",
+            ["JournalEntryLogged"] = "Journal entry added",
+            ["VitalsLoggedItem"] = "Vitals logged",
+            ["VitalsLoggedFor"] = "Vitals logged for {0}",
+            ["OpenAlerts"] = "open alert(s)",
+            ["VitalsLogged"] = "Vitals logged",
+            ["NoVitalsYet"] = "No vitals yet",
+            ["VaccinesDue"] = "vaccine(s) due",
+            ["GrowthLogged"] = "Growth logged",
+            ["GrowthLoggedFor"] = "Growth logged for {0}",
+            ["NoGrowthYet"] = "No growth entries yet",
+            ["WeeksOld"] = "weeks old",
+            ["MinAgo"] = " min ago",
+            ["HourAgo"] = "h ago",
+            ["DayAgo"] = "d ago",
+        },
+        ["Hindi"] = new()
+        {
+            ["Title"] = "यात्रा",
+            ["Subtitle"] = "आप जो कुछ भी ट्रैक कर रही हैं वह एक जगह — क्या हो चुका है, किस पर ध्यान देना है, और आगे क्या है।",
+            ["EmptyTitle"] = "अभी तक कुछ भी ट्रैक नहीं किया गया 🌷",
+            ["EmptyHint"] = "अपनी यात्रा यहां देखने के लिए प्रेगनेंसी चेक-इन शुरू करें, या एल्डर केयर/इन्फैंट केयर से किसी को जोड़ें।",
+            ["NextUpHeading"] = "आगे क्या है",
+            ["EmptyNextUp"] = "अभी कुछ भी लंबित नहीं है 🎉",
+            ["RecentlyDoneHeading"] = "हाल ही में पूरा हुआ",
+            ["EmptyRecent"] = "अभी तक कुछ दर्ज नहीं किया गया",
+            ["Week"] = "सप्ताह",
+            ["Of40"] = "40 में से",
+            ["LastCheckIn"] = "आखिरी चेक-इन",
+            ["NoCheckInYet"] = "अभी तक कोई चेक-इन नहीं",
+            ["MoodCheckInLogged"] = "मूड चेक-इन दर्ज किया गया",
+            ["JournalEntryLogged"] = "डायरी प्रविष्टि जोड़ी गई",
+            ["VitalsLoggedItem"] = "वाइटल्स दर्ज किए गए",
+            ["VitalsLoggedFor"] = "{0} के लिए वाइटल्स दर्ज किए गए",
+            ["OpenAlerts"] = "खुला अलर्ट",
+            ["VitalsLogged"] = "वाइटल्स दर्ज किए गए",
+            ["NoVitalsYet"] = "अभी तक कोई वाइटल्स नहीं",
+            ["VaccinesDue"] = "टीका(टीके) देय",
+            ["GrowthLogged"] = "वृद्धि दर्ज की गई",
+            ["GrowthLoggedFor"] = "{0} के लिए वृद्धि दर्ज की गई",
+            ["NoGrowthYet"] = "अभी तक कोई वृद्धि प्रविष्टि नहीं",
+            ["WeeksOld"] = "सप्ताह की उम्र",
+            ["MinAgo"] = " मिनट पहले",
+            ["HourAgo"] = " घंटे पहले",
+            ["DayAgo"] = " दिन पहले",
+        },
+        ["Telugu"] = new()
+        {
+            ["Title"] = "ప్రయాణం",
+            ["Subtitle"] = "మీరు ట్రాక్ చేస్తున్నదంతా ఒకే చోట — ఏమి పూర్తయింది, దేనిపై దృష్టి పెట్టాలి, మరియు తర్వాత ఏమిటి.",
+            ["EmptyTitle"] = "ఇంకా ఏమీ ట్రాక్ చేయలేదు 🌷",
+            ["EmptyHint"] = "మీ ప్రయాణాన్ని ఇక్కడ చూడటానికి ప్రెగ్నెన్సీ చెక్-ఇన్ ప్రారంభించండి, లేదా ఎల్డర్ కేర్/ఇన్ఫెంట్ కేర్ నుండి ఎవరినైనా జోడించండి.",
+            ["NextUpHeading"] = "తర్వాత ఏమిటి",
+            ["EmptyNextUp"] = "ప్రస్తుతం ఏమీ పెండింగ్‌లో లేదు 🎉",
+            ["RecentlyDoneHeading"] = "ఇటీవల పూర్తయినవి",
+            ["EmptyRecent"] = "ఇంకా ఏమీ నమోదు కాలేదు",
+            ["Week"] = "వారం",
+            ["Of40"] = "40లో",
+            ["LastCheckIn"] = "చివరి చెక్-ఇన్",
+            ["NoCheckInYet"] = "ఇంకా చెక్-ఇన్ లేదు",
+            ["MoodCheckInLogged"] = "మూడ్ చెక్-ఇన్ నమోదు చేయబడింది",
+            ["JournalEntryLogged"] = "డైరీ ఎంట్రీ జోడించబడింది",
+            ["VitalsLoggedItem"] = "వైటల్స్ నమోదు చేయబడ్డాయి",
+            ["VitalsLoggedFor"] = "{0} కోసం వైటల్స్ నమోదు చేయబడ్డాయి",
+            ["OpenAlerts"] = "తెరిచిన హెచ్చరిక(లు)",
+            ["VitalsLogged"] = "వైటల్స్ నమోదు చేయబడ్డాయి",
+            ["NoVitalsYet"] = "ఇంకా వైటల్స్ లేవు",
+            ["VaccinesDue"] = "టీకా(లు) రావాల్సి ఉంది",
+            ["GrowthLogged"] = "పెరుగుదల నమోదు చేయబడింది",
+            ["GrowthLoggedFor"] = "{0} కోసం పెరుగుదల నమోదు చేయబడింది",
+            ["NoGrowthYet"] = "ఇంకా పెరుగుదల ఎంట్రీలు లేవు",
+            ["WeeksOld"] = "వారాల వయస్సు",
+            ["MinAgo"] = " నిమిషాల క్రితం",
+            ["HourAgo"] = " గంటల క్రితం",
+            ["DayAgo"] = " రోజుల క్రితం",
+        },
+    };
+
+    private string T(string key) =>
+        (Strings.TryGetValue(_language, out var dict) && dict.TryGetValue(key, out var value))
+            ? value
+            : Strings["English"][key];
+}
