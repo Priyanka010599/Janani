@@ -110,6 +110,7 @@ public class BloomAgentRegistry
     public DayNurtureService            DayNurture    { get; }
     public ElderNurtureService          ElderNurture  { get; }
     public HealthMonitorService         HealthMonitor { get; }
+    public PostpartumRecoveryMonitorService PostpartumRecoveryMonitor { get; }
     public CaregiverCoordinationService CaregiverCoordination { get; }
     public InfantCareService            InfantCare    { get; }
     public MedicineLookupService        MedicineLookup { get; }
@@ -122,6 +123,7 @@ public class BloomAgentRegistry
         DayNurtureService dayNurture,
         ElderNurtureService elderNurture,
         HealthMonitorService healthMonitor,
+        PostpartumRecoveryMonitorService postpartumRecoveryMonitor,
         CaregiverCoordinationService caregiverCoordination,
         InfantCareService infantCare,
         MedicineLookupService medicineLookup)
@@ -133,6 +135,7 @@ public class BloomAgentRegistry
         DayNurture             = dayNurture;
         ElderNurture           = elderNurture;
         HealthMonitor          = healthMonitor;
+        PostpartumRecoveryMonitor = postpartumRecoveryMonitor;
         CaregiverCoordination  = caregiverCoordination;
         InfantCare             = infantCare;
         MedicineLookup         = medicineLookup;
@@ -147,6 +150,7 @@ public class BloomAgentRegistry
         DayNurture,
         ElderNurture,
         HealthMonitor,
+        PostpartumRecoveryMonitor,
         CaregiverCoordination,
         InfantCare,
         MedicineLookup

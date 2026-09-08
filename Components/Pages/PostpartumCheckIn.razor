@@ -1,0 +1,408 @@
+@page "/postpartum-checkin"
+@using Janani.Models
+@using Janani.Data
+@using Janani.Services
+@using Microsoft.EntityFrameworkCore
+@inject AppDbContext Db
+@inject CurrentUserService CurrentUser
+@inject UserProfileCache ProfileCache
+@inject PostpartumCheckInService CheckInService
+@rendermode InteractiveServer
+
+<PageTitle>Janani — Postpartum Check-In</PageTitle>
+
+<div class="bloom-container">
+    <div class="section-header">
+        <h1>💗 @T("Title")</h1>
+        <p class="subtitle">@T("Subtitle")</p>
+    </div>
+
+    @if (_postpartumDay == null)
+    {
+        <div class="empty-state">
+            <p>@T("NotYetTitle")</p>
+            <p>@T("NotYetHint")</p>
+        </div>
+    }
+    else
+    {
+    @if (_activeAlert != null)
+    {
+        <div class="sos-safety-note">
+            <p>@(_activeAlert.Severity == AlertSeverity.Critical ? "🚨" : "⚠️") @_activeAlert.Message</p>
+            <a class="bloom-btn primary small-btn" href="/emergency">🆘 @T("SendSosBtn")</a>
+            <button class="bloom-btn secondary small-btn" @onclick="AcknowledgeAlertAsync">@T("SeenThisBtn")</button>
+        </div>
+    }
+
+    <div class="plan-card">
+        <h3>@T("PainLabel")</h3>
+        <div class="feeling-grid">
+            @for (var pain = 0; pain <= 10; pain++)
+            {
+                var level = pain;
+                <button type="button" class="feeling-btn @(_painLevel == level ? "selected" : "")" @onclick="() => _painLevel = level">@level</button>
+            }
+        </div>
+
+        <h3>@T("BleedingLabel")</h3>
+        <div class="feeling-grid">
+            <button type="button" class="feeling-btn @(_bleeding == BleedingLevel.None ? "selected" : "")" @onclick="() => _bleeding = BleedingLevel.None">@T("BleedingNone")</button>
+            <button type="button" class="feeling-btn @(_bleeding == BleedingLevel.Light ? "selected" : "")" @onclick="() => _bleeding = BleedingLevel.Light">@T("BleedingLight")</button>
+            <button type="button" class="feeling-btn @(_bleeding == BleedingLevel.Moderate ? "selected" : "")" @onclick="() => _bleeding = BleedingLevel.Moderate">@T("BleedingModerate")</button>
+            <button type="button" class="feeling-btn @(_bleeding == BleedingLevel.Heavy ? "selected" : "")" @onclick="() => _bleeding = BleedingLevel.Heavy">@T("BleedingHeavy")</button>
+            <button type="button" class="feeling-btn @(_bleeding == BleedingLevel.SoakingPadHourly ? "selected" : "")" @onclick="() => _bleeding = BleedingLevel.SoakingPadHourly">@T("BleedingSoaking")</button>
+        </div>
+
+        <h3>@T("TempLabel")</h3>
+        <input type="number" step="0.1" @bind="_temperature" placeholder="@T("TempPlaceholder")" />
+
+        <h3>@_woundQuestion</h3>
+        <div class="feeling-grid">
+            <button type="button" class="feeling-btn @(_wound == WoundStatus.HealingWell ? "selected" : "")" @onclick="() => _wound = WoundStatus.HealingWell">@T("WoundHealingWell")</button>
+            <button type="button" class="feeling-btn @(_wound == WoundStatus.MildRednessOrSwelling ? "selected" : "")" @onclick="() => _wound = WoundStatus.MildRednessOrSwelling">@T("WoundMild")</button>
+            <button type="button" class="feeling-btn @(_wound == WoundStatus.SignificantConcern ? "selected" : "")" @onclick="() => _wound = WoundStatus.SignificantConcern">@T("WoundSignificant")</button>
+        </div>
+
+        <h3>@T("MoodLabel")</h3>
+        <div class="mood-grid">
+            @foreach (var mood in Enum.GetValues<MoodType>())
+            {
+                <button type="button" class="mood-btn @(_mood == mood ? "selected" : "")" @onclick="() => _mood = mood">
+                    <span class="mood-emoji">@MoodEmoji(mood)</span>
+                    <span class="mood-label">@MoodLabel(mood)</span>
+                </button>
+            }
+        </div>
+
+        <div class="form-actions">
+            <button class="bloom-btn primary" @onclick="SubmitCheckInAsync" disabled="@_submitting">
+                @(_submitting ? T("Submitting") : T("SubmitBtn"))
+            </button>
+            @if (_justSubmitted)
+            {
+                <span class="sos-hint">✅ @T("SubmittedToday")</span>
+            }
+        </div>
+    </div>
+
+    @if (_epdsDue)
+    {
+        <div class="plan-card">
+            <h3>🧠 @T("EpdsTitle")</h3>
+            @if (!EpdsContent.IsLanguageAvailable(_appLanguage))
+            {
+                <p class="sos-hint">@T("EpdsUnavailableInLanguage")</p>
+            }
+            else if (_epdsJustSubmitted)
+            {
+                <p class="sos-hint">✅ @T("EpdsSubmittedThanks")</p>
+            }
+            else if (!_epdsStarted)
+            {
+                <p>@T("EpdsIntro")</p>
+                <p class="sos-hint">@T("EpdsAttribution")</p>
+                <button class="bloom-btn secondary" @onclick="() => _epdsStarted = true">@T("EpdsStartBtn")</button>
+            }
+            else
+            {
+                @foreach (var item in EpdsContent.EnglishItems)
+                {
+                    <div class="form-field">
+                        <label>@item.Number. @item.Statement</label>
+                        <div class="feeling-grid">
+                            @for (var i = 0; i < item.Options.Length; i++)
+                            {
+                                var optionIndex = i;
+                                <button type="button"
+                                        class="feeling-btn @(_epdsAnswers.GetValueOrDefault(item.Number, -1) == optionIndex ? "selected" : "")"
+                                        @onclick="() => _epdsAnswers[item.Number] = optionIndex">
+                                    @item.Options[optionIndex]
+                                </button>
+                            }
+                        </div>
+                    </div>
+                }
+                <button class="bloom-btn primary" @onclick="SubmitEpdsAsync" disabled="@(!AllEpdsAnswered() || _submittingEpds)">
+                    @(_submittingEpds ? T("Submitting") : T("EpdsSubmitBtn"))
+                </button>
+            }
+        </div>
+    }
+    }
+</div>
+
+@code {
+    private int _userId;
+    private AppLanguage _appLanguage = AppLanguage.English;
+    private string _language = "English";
+    private int? _postpartumDay;
+    private DeliveryType? _deliveryType;
+    private string _userName = "Mama";
+    private string? _doctorName;
+    private string? _doctorEmail;
+
+    private int _painLevel;
+    private BleedingLevel _bleeding = BleedingLevel.None;
+    private decimal? _temperature;
+    private WoundStatus _wound = WoundStatus.HealingWell;
+    private MoodType _mood = MoodType.Peaceful;
+    private string _woundQuestion = "";
+    private bool _submitting;
+    private bool _justSubmitted;
+    private PostpartumAlert? _activeAlert;
+
+    private bool _epdsDue;
+    private int _epdsScheduledDay;
+    private bool _epdsStarted;
+    private bool _submittingEpds;
+    private bool _epdsJustSubmitted;
+    private readonly Dictionary<int, int> _epdsAnswers = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        _userId = await CurrentUser.GetUserIdAsync();
+        var profile = await ProfileCache.GetAsync();
+        _appLanguage = profile?.Language ?? AppLanguage.English;
+        _language = _appLanguage.ToString();
+        _deliveryType = profile?.DeliveryType;
+        _userName = string.IsNullOrWhiteSpace(profile?.Name) ? "Mama" : profile.Name;
+        _doctorName = profile?.DoctorName;
+        _doctorEmail = profile?.DoctorEmail;
+        _woundQuestion = PostpartumCheckInQuestions.WoundQuestionFor(_deliveryType);
+
+        _postpartumDay = profile?.PostpartumDay;
+        if (_postpartumDay == null) return;
+
+        _activeAlert = await Db.PostpartumAlerts.AsNoTracking()
+            .Where(a => a.UserId == _userId && !a.Acknowledged)
+            .OrderByDescending(a => a.TriggeredAt)
+            .FirstOrDefaultAsync();
+
+        var day = _postpartumDay.Value;
+        var completedDays = await Db.EpdsScreenings.AsNoTracking()
+            .Where(e => e.UserId == _userId)
+            .Select(e => e.ScheduledDay)
+            .ToListAsync();
+
+        foreach (var milestone in new[] { 10, 42 })
+        {
+            if (day >= milestone && !completedDays.Contains(milestone))
+            {
+                _epdsDue = true;
+                _epdsScheduledDay = milestone;
+                break;
+            }
+        }
+    }
+
+    private bool AllEpdsAnswered() => EpdsContent.EnglishItems.All(i => _epdsAnswers.ContainsKey(i.Number));
+
+    private async Task SubmitCheckInAsync()
+    {
+        _submitting = true;
+        _justSubmitted = false;
+        StateHasChanged();
+
+        var checkIn = new Janani.Models.PostpartumCheckIn
+        {
+            UserId = _userId,
+            PainLevel = _painLevel,
+            Bleeding = _bleeding,
+            TemperatureC = _temperature,
+            Wound = _wound,
+            Mood = _mood
+        };
+
+        await CheckInService.SubmitCheckInAsync(checkIn, _userName, _doctorName, _doctorEmail, _appLanguage);
+
+        _activeAlert = await Db.PostpartumAlerts.AsNoTracking()
+            .Where(a => a.UserId == _userId && !a.Acknowledged)
+            .OrderByDescending(a => a.TriggeredAt)
+            .FirstOrDefaultAsync();
+
+        _submitting = false;
+        _justSubmitted = true;
+    }
+
+    private async Task SubmitEpdsAsync()
+    {
+        if (!AllEpdsAnswered()) return;
+        _submittingEpds = true;
+        StateHasChanged();
+
+        var screening = new EpdsScreening
+        {
+            UserId = _userId,
+            ScheduledDay = _epdsScheduledDay,
+            Item1 = ScoreFor(1), Item2 = ScoreFor(2), Item3 = ScoreFor(3), Item4 = ScoreFor(4), Item5 = ScoreFor(5),
+            Item6 = ScoreFor(6), Item7 = ScoreFor(7), Item8 = ScoreFor(8), Item9 = ScoreFor(9), Item10 = ScoreFor(10)
+        };
+
+        await CheckInService.SubmitEpdsScreeningAsync(screening, _userName, _doctorName, _doctorEmail, _appLanguage);
+
+        _activeAlert = await Db.PostpartumAlerts.AsNoTracking()
+            .Where(a => a.UserId == _userId && !a.Acknowledged)
+            .OrderByDescending(a => a.TriggeredAt)
+            .FirstOrDefaultAsync();
+
+        _submittingEpds = false;
+        _epdsJustSubmitted = true;
+        _epdsDue = false;
+
+        int ScoreFor(int itemNumber)
+        {
+            var item = EpdsContent.EnglishItems.Single(i => i.Number == itemNumber);
+            return EpdsContent.ScoreForSelection(item, _epdsAnswers[itemNumber]);
+        }
+    }
+
+    private async Task AcknowledgeAlertAsync()
+    {
+        if (_activeAlert == null) return;
+        var alert = await Db.PostpartumAlerts.FindAsync(_activeAlert.Id);
+        if (alert != null)
+        {
+            alert.Acknowledged = true;
+            await Db.SaveChangesAsync();
+        }
+        _activeAlert = null;
+    }
+
+    private static string MoodEmoji(MoodType mood) => mood switch
+    {
+        MoodType.Exhausted => "😴",
+        MoodType.Anxious => "😟",
+        MoodType.Nauseous => "🤢",
+        MoodType.Emotional => "🥺",
+        MoodType.Happy => "😊",
+        MoodType.Energetic => "✨",
+        MoodType.Overwhelmed => "😮‍💨",
+        MoodType.Peaceful => "🌿",
+        _ => ""
+    };
+
+    private string MoodLabel(MoodType mood) => mood switch
+    {
+        MoodType.Exhausted => T("MoodExhausted"),
+        MoodType.Anxious => T("MoodAnxious"),
+        MoodType.Nauseous => T("MoodNauseous"),
+        MoodType.Emotional => T("MoodEmotional"),
+        MoodType.Happy => T("MoodHappy"),
+        MoodType.Energetic => T("MoodEnergetic"),
+        MoodType.Overwhelmed => T("MoodOverwhelmed"),
+        MoodType.Peaceful => T("MoodPeaceful"),
+        _ => mood.ToString()
+    };
+
+    private static readonly Dictionary<string, Dictionary<string, string>> Strings = new()
+    {
+        ["English"] = new()
+        {
+            ["Title"] = "Postpartum Check-In",
+            ["Subtitle"] = "A quick daily check on how your recovery is going — a concerning answer gets flagged by a fixed check, not a guess, and explained to you in plain language.",
+            ["NotYetTitle"] = "No delivery date on file yet",
+            ["NotYetHint"] = "Once your delivery date is recorded on your profile, your daily check-in will appear here.",
+            ["SendSosBtn"] = "Send SOS about this",
+            ["SeenThisBtn"] = "I've seen this",
+            ["PainLabel"] = "Pain today (0 = none, 10 = worst possible)",
+            ["BleedingLabel"] = "Bleeding today",
+            ["BleedingNone"] = "None",
+            ["BleedingLight"] = "Light",
+            ["BleedingModerate"] = "Moderate",
+            ["BleedingHeavy"] = "Heavier than expected",
+            ["BleedingSoaking"] = "Soaking a pad within an hour",
+            ["TempLabel"] = "Temperature (°C, if you've taken it)",
+            ["TempPlaceholder"] = "e.g. 36.8",
+            ["WoundHealingWell"] = "Healing well",
+            ["WoundMild"] = "Some redness or swelling",
+            ["WoundSignificant"] = "Spreading redness, pus, foul smell, or opening",
+            ["MoodLabel"] = "How are you feeling today?",
+            ["MoodExhausted"] = "Exhausted", ["MoodAnxious"] = "Anxious", ["MoodNauseous"] = "Nauseous", ["MoodEmotional"] = "Emotional",
+            ["MoodHappy"] = "Happy", ["MoodEnergetic"] = "Energetic", ["MoodOverwhelmed"] = "Overwhelmed", ["MoodPeaceful"] = "Peaceful",
+            ["SubmitBtn"] = "Submit today's check-in",
+            ["Submitting"] = "Submitting…",
+            ["SubmittedToday"] = "Logged for today",
+            ["EpdsTitle"] = "Mental Health Screening (EPDS-10)",
+            ["EpdsIntro"] = "This is a short, validated 10-question screening for how you've been feeling over the past 7 days — not just today. It takes about 2 minutes.",
+            ["EpdsAttribution"] = "Edinburgh Postnatal Depression Scale — Cox, Holden & Sagovsky (1987), British Journal of Psychiatry.",
+            ["EpdsStartBtn"] = "Start screening",
+            ["EpdsSubmitBtn"] = "Submit screening",
+            ["EpdsSubmittedThanks"] = "Thank you for completing this — your care team will follow up if needed.",
+            ["EpdsUnavailableInLanguage"] = "This screening is currently only available in English. Please switch your language to English in Settings to take it, or ask your provider for a paper version in your language.",
+        },
+        ["Hindi"] = new()
+        {
+            ["Title"] = "प्रसवोत्तर जांच",
+            ["Subtitle"] = "आपकी रिकवरी कैसी चल रही है, इस पर रोज़ाना एक छोटी जांच — चिंताजनक उत्तर एक तय जांच द्वारा पहचाना जाता है, अंदाज़े से नहीं, और आपको सरल भाषा में समझाया जाता है।",
+            ["NotYetTitle"] = "अभी तक कोई प्रसव तिथि दर्ज नहीं है",
+            ["NotYetHint"] = "एक बार आपकी प्रसव तिथि आपकी प्रोफ़ाइल पर दर्ज हो जाने पर, आपकी दैनिक जांच यहाँ दिखाई देगी।",
+            ["SendSosBtn"] = "इसके बारे में SOS भेजें",
+            ["SeenThisBtn"] = "मैंने देख लिया",
+            ["PainLabel"] = "आज दर्द (0 = कोई नहीं, 10 = सबसे ज़्यादा)",
+            ["BleedingLabel"] = "आज रक्तस्राव",
+            ["BleedingNone"] = "कोई नहीं",
+            ["BleedingLight"] = "हल्का",
+            ["BleedingModerate"] = "मध्यम",
+            ["BleedingHeavy"] = "अपेक्षा से अधिक",
+            ["BleedingSoaking"] = "एक घंटे में पैड भीग जाना",
+            ["TempLabel"] = "तापमान (°C, यदि लिया हो)",
+            ["TempPlaceholder"] = "जैसे 36.8",
+            ["WoundHealingWell"] = "अच्छी तरह ठीक हो रहा है",
+            ["WoundMild"] = "कुछ लालिमा या सूजन",
+            ["WoundSignificant"] = "फैलती लालिमा, मवाद, दुर्गंध, या घाव खुलना",
+            ["MoodLabel"] = "आज आप कैसा महसूस कर रही हैं?",
+            ["MoodExhausted"] = "थकी हुई", ["MoodAnxious"] = "चिंतित", ["MoodNauseous"] = "जी मिचलाना", ["MoodEmotional"] = "भावुक",
+            ["MoodHappy"] = "खुश", ["MoodEnergetic"] = "ऊर्जावान", ["MoodOverwhelmed"] = "अभिभूत", ["MoodPeaceful"] = "शांत",
+            ["SubmitBtn"] = "आज की जांच सबमिट करें",
+            ["Submitting"] = "सबमिट हो रहा है…",
+            ["SubmittedToday"] = "आज के लिए दर्ज हो गया",
+            ["EpdsTitle"] = "मानसिक स्वास्थ्य जांच (EPDS-10)",
+            ["EpdsIntro"] = "यह पिछले 7 दिनों में आप कैसा महसूस कर रही हैं, इसके लिए एक छोटी, मान्य 10-प्रश्न जांच है — केवल आज के लिए नहीं। इसमें लगभग 2 मिनट लगते हैं।",
+            ["EpdsAttribution"] = "एडिनबर्ग प्रसवोत्तर अवसाद स्केल — Cox, Holden & Sagovsky (1987), British Journal of Psychiatry.",
+            ["EpdsStartBtn"] = "जांच शुरू करें",
+            ["EpdsSubmitBtn"] = "जांच सबमिट करें",
+            ["EpdsSubmittedThanks"] = "इसे पूरा करने के लिए धन्यवाद — यदि आवश्यक हो तो आपकी देखभाल टीम फॉलो-अप करेगी।",
+            ["EpdsUnavailableInLanguage"] = "यह जांच फ़िलहाल केवल अंग्रेज़ी में उपलब्ध है। इसे लेने के लिए कृपया सेटिंग्स में अपनी भाषा अंग्रेज़ी में बदलें, या अपने डॉक्टर से अपनी भाषा में कागज़ी संस्करण माँगें।",
+        },
+        ["Telugu"] = new()
+        {
+            ["Title"] = "ప్రసవానంతర చెక్-ఇన్",
+            ["Subtitle"] = "మీ కోలుకోవడం ఎలా జరుగుతుందో రోజువారీ చిన్న తనిఖీ — ఆందోళనకరమైన సమాధానం ఒక నిర్ణీత తనిఖీ ద్వారా గుర్తించబడుతుంది, ఊహ ద్వారా కాదు, మరియు మీకు సరళమైన భాషలో వివరించబడుతుంది.",
+            ["NotYetTitle"] = "ఇంకా ప్రసవ తేదీ నమోదు కాలేదు",
+            ["NotYetHint"] = "మీ ప్రొఫైల్‌లో మీ ప్రసవ తేదీ నమోదైన తర్వాత, మీ రోజువారీ చెక్-ఇన్ ఇక్కడ కనిపిస్తుంది.",
+            ["SendSosBtn"] = "దీని గురించి SOS పంపండి",
+            ["SeenThisBtn"] = "నేను చూశాను",
+            ["PainLabel"] = "ఈరోజు నొప్పి (0 = లేదు, 10 = అత్యధికం)",
+            ["BleedingLabel"] = "ఈరోజు రక్తస్రావం",
+            ["BleedingNone"] = "లేదు",
+            ["BleedingLight"] = "తక్కువ",
+            ["BleedingModerate"] = "మధ్యస్థం",
+            ["BleedingHeavy"] = "ఊహించిన దానికంటే ఎక్కువ",
+            ["BleedingSoaking"] = "ఒక గంటలో ప్యాడ్ తడిసిపోవడం",
+            ["TempLabel"] = "ఉష్ణోగ్రత (°C, తీసుకుంటే)",
+            ["TempPlaceholder"] = "ఉదా. 36.8",
+            ["WoundHealingWell"] = "బాగా నయమవుతోంది",
+            ["WoundMild"] = "కొంచెం ఎరుపు లేదా వాపు",
+            ["WoundSignificant"] = "వ్యాపిస్తున్న ఎరుపు, చీము, దుర్వాసన, లేదా గాయం తెరుచుకోవడం",
+            ["MoodLabel"] = "ఈరోజు మీకు ఎలా అనిపిస్తోంది?",
+            ["MoodExhausted"] = "అలసిపోయాను", ["MoodAnxious"] = "ఆందోళనగా", ["MoodNauseous"] = "వికారంగా", ["MoodEmotional"] = "భావోద్వేగంగా",
+            ["MoodHappy"] = "సంతోషంగా", ["MoodEnergetic"] = "శక్తివంతంగా", ["MoodOverwhelmed"] = "ముంచెత్తినట్లు", ["MoodPeaceful"] = "ప్రశాంతంగా",
+            ["SubmitBtn"] = "ఈరోజు చెక్-ఇన్ సమర్పించండి",
+            ["Submitting"] = "సమర్పిస్తోంది…",
+            ["SubmittedToday"] = "ఈరోజుకు నమోదైంది",
+            ["EpdsTitle"] = "మానసిక ఆరోగ్య పరీక్ష (EPDS-10)",
+            ["EpdsIntro"] = "గత 7 రోజులుగా మీరు ఎలా భావిస్తున్నారో తెలుసుకోవడానికి ఇది ఒక చిన్న, ధృవీకరించబడిన 10-ప్రశ్నల పరీక్ష — ఈరోజు మాత్రమే కాదు. దీనికి సుమారు 2 నిమిషాలు పడుతుంది.",
+            ["EpdsAttribution"] = "ఎడిన్‌బర్గ్ ప్రసవానంతర డిప్రెషన్ స్కేల్ — Cox, Holden & Sagovsky (1987), British Journal of Psychiatry.",
+            ["EpdsStartBtn"] = "పరీక్ష ప్రారంభించండి",
+            ["EpdsSubmitBtn"] = "పరీక్ష సమర్పించండి",
+            ["EpdsSubmittedThanks"] = "దీన్ని పూర్తి చేసినందుకు ధన్యవాదాలు — అవసరమైతే మీ సంరక్షణ బృందం ఫాలో-అప్ చేస్తుంది.",
+            ["EpdsUnavailableInLanguage"] = "ఈ పరీక్ష ప్రస్తుతం ఆంగ్లంలో మాత్రమే అందుబాటులో ఉంది. దీన్ని తీసుకోవడానికి దయచేసి సెట్టింగ్‌లలో మీ భాషను ఆంగ్లానికి మార్చండి, లేదా మీ డాక్టర్‌ను మీ భాషలో పేపర్ వెర్షన్ కోసం అడగండి.",
+        },
+    };
+
+    private string T(string key) =>
+        (Strings.TryGetValue(_language, out var dict) && dict.TryGetValue(key, out var value))
+            ? value
+            : Strings["English"][key];
+}
