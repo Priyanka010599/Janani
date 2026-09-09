@@ -68,6 +68,43 @@
                 </div>
             }
 
+            @* Delivery capture. Recovery Plan and Postpartum Check-In both refuse
+               to render without a delivery date, and told the user to record it
+               "on your profile" -- which had no such field, so postpartum care
+               was unreachable through the UI. Shown regardless of pregnancy
+               tracking: she fills it in the day it happens, and a mother who
+               joined after delivering needs it too. *@
+            <div class="form-field">
+                <label>@T("DeliveryDateLabel")</label>
+                <input type="date" @bind="_deliveryDate" />
+                <p class="sos-hint">@T("DeliveryDateHint")</p>
+            </div>
+
+            @if (_deliveryDate is not null)
+            {
+                <div class="form-field">
+                    <label>@T("DeliveryTypeLabel")</label>
+                    <select @bind="_deliveryTypeValue">
+                        <option value="">@T("NotSaidYet")</option>
+                        @foreach (var dt in Enum.GetValues<DeliveryType>())
+                        {
+                            <option value="@dt">@Humanize(dt.ToString())</option>
+                        }
+                    </select>
+                </div>
+
+                <div class="form-field">
+                    <label>@T("FeedingMethodLabel")</label>
+                    <select @bind="_feedingMethodValue">
+                        <option value="">@T("NotSaidYet")</option>
+                        @foreach (var fm in Enum.GetValues<MaternalFeedingMethod>())
+                        {
+                            <option value="@fm">@Humanize(fm.ToString())</option>
+                        }
+                    </select>
+                </div>
+            }
+
             <div class="form-field">
                 <label>@T("LanguageLabel")</label>
                 <select @bind="_language">
@@ -113,6 +150,11 @@
     private bool _tracksPregnancy;
     private bool _caresForElder;
     private bool _caresForInfant;
+    private DateOnly? _deliveryDate;
+    // Enum selects are backed by strings, not nullable enums: an empty <option>
+    // cannot round-trip to null through @bind on a nullable enum.
+    private string _deliveryTypeValue = string.Empty;
+    private string _feedingMethodValue = string.Empty;
     private AppLanguage _language;
     private string _uiLanguage = "English";
     private string? _error;
@@ -132,6 +174,9 @@
             _tracksPregnancy = _profile.TracksPregnancy;
             _caresForElder = _profile.CaresForElder;
             _caresForInfant = _profile.CaresForInfant;
+            _deliveryDate = _profile.DeliveryDate;
+            _deliveryTypeValue = _profile.DeliveryType?.ToString() ?? string.Empty;
+            _feedingMethodValue = _profile.FeedingMethod?.ToString() ?? string.Empty;
             _language = _profile.Language;
             _uiLanguage = _profile.Language.ToString();
         }
@@ -150,6 +195,11 @@
             _profile.CaresForElder = _caresForElder;
             _profile.CaresForInfant = _caresForInfant;
             _profile.Language = _language;
+            _profile.DeliveryDate = _deliveryDate;
+            _profile.DeliveryType = Enum.TryParse<DeliveryType>(_deliveryTypeValue, out var deliveryType)
+                ? deliveryType : null;
+            _profile.FeedingMethod = Enum.TryParse<MaternalFeedingMethod>(_feedingMethodValue, out var feeding)
+                ? feeding : null;
             if (_tracksPregnancy)
             {
                 _profile.PregnancyStartDate = DateOnly.FromDateTime(DateTime.Today).AddDays(-(Math.Clamp(_weeksPregnant, 0, 42) * 7));
@@ -171,6 +221,24 @@
         }
     }
 
+    // "VaginalWithTearOrEpisiotomy" -> "Vaginal with tear or episiotomy".
+    // These are clinical terms and stay English in every UI language, same as
+    // the medicine names elsewhere; translating them is a separate decision.
+    private static string Humanize(string enumName)
+    {
+        var sb = new System.Text.StringBuilder();
+        for (var i = 0; i < enumName.Length; i++)
+        {
+            if (i > 0 && char.IsUpper(enumName[i]))
+            {
+                sb.Append(' ');
+                sb.Append(char.ToLowerInvariant(enumName[i]));
+            }
+            else sb.Append(enumName[i]);
+        }
+        return sb.ToString();
+    }
+
     private static readonly Dictionary<string, Dictionary<string, string>> Strings = new()
     {
         ["English"] = new()
@@ -190,6 +258,11 @@
             ["CurrentWeekPrefix"] = "Currently calculated as week ",
             ["CurrentWeekSuffix"] = ". Changing this resets the date your pregnancy is tracked from.",
             ["WorkingWomanLabel"] = "I'm balancing this with work",
+            ["DeliveryDateLabel"] = "Delivery date (once your baby has arrived)",
+            ["DeliveryDateHint"] = "Recording this unlocks your Recovery Plan and daily Postpartum Check-In. Leave it empty until then.",
+            ["DeliveryTypeLabel"] = "How did you deliver?",
+            ["FeedingMethodLabel"] = "How are you feeding your baby?",
+            ["NotSaidYet"] = "Prefer not to say yet",
             ["LanguageLabel"] = "Language",
             ["LanguageHint"] = "All agents — Companion, Elder Care, Infant Care, Family Care, and the rest — respond in this language.",
             ["UsernameLabel"] = "Username",
@@ -215,6 +288,11 @@
             ["CurrentWeekPrefix"] = "अभी सप्ताह ",
             ["CurrentWeekSuffix"] = " के रूप में गणना की गई है। इसे बदलने से आपकी गर्भावस्था ट्रैक होने की तारीख रीसेट हो जाती है।",
             ["WorkingWomanLabel"] = "मैं इसे काम के साथ संभाल रही हूं",
+            ["DeliveryDateLabel"] = "प्रसव की तारीख (शिशु के जन्म के बाद)",
+            ["DeliveryDateHint"] = "यह दर्ज करने पर आपका रिकवरी प्लान और दैनिक चेक-इन शुरू हो जाता है। तब तक खाली छोड़ें।",
+            ["DeliveryTypeLabel"] = "प्रसव कैसे हुआ?",
+            ["FeedingMethodLabel"] = "आप शिशु को कैसे दूध पिला रही हैं?",
+            ["NotSaidYet"] = "अभी नहीं बताना चाहती",
             ["LanguageLabel"] = "भाषा",
             ["LanguageHint"] = "सभी एजेंट — साथी, एल्डर केयर, इन्फेंट केयर, फैमिली केयर, और बाकी सभी — इसी भाषा में जवाब देते हैं।",
             ["UsernameLabel"] = "यूज़रनेम",
@@ -240,6 +318,11 @@
             ["CurrentWeekPrefix"] = "ప్రస్తుతం వారం ",
             ["CurrentWeekSuffix"] = "గా లెక్కించబడింది. దీన్ని మార్చడం వల్ల మీ గర్భధారణ ట్రాక్ చేయబడే తేదీ రీసెట్ అవుతుంది.",
             ["WorkingWomanLabel"] = "నేను దీన్ని పనితో బ్యాలెన్స్ చేస్తున్నాను",
+            ["DeliveryDateLabel"] = "ప్రసవ తేదీ (బిడ్డ పుట్టిన తరువాత)",
+            ["DeliveryDateHint"] = "ఇది నమోదు చేస్తే రికవరీ ప్లాన్ మరియు రోజువారీ చెక్-ఇన్ మొదలవుతాయి. అలాగే ఖాళీగా ఉంచండి.",
+            ["DeliveryTypeLabel"] = "ప్రసవం ఎలా జరిగింది?",
+            ["FeedingMethodLabel"] = "బిడ్డకు ఎలా పాలిస్తున్నారు?",
+            ["NotSaidYet"] = "ఇప్పుడే చెప్పదలచుకోలేదు",
             ["LanguageLabel"] = "భాష",
             ["LanguageHint"] = "అన్ని ఏజెంట్లు — సహచరి, ఎల్డర్ కేర్, ఇన్ఫెంట్ కేర్, ఫ్యామిలీ కేర్, మరియు మిగతావన్నీ — ఈ భాషలో స్పందిస్తాయి.",
             ["UsernameLabel"] = "యూజర్‌నేమ్",
