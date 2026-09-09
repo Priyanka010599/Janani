@@ -1,4 +1,4 @@
-@page "/elder-care"
+﻿@page "/elder-care"
 @using Janani.Models
 @using Janani.Data
 @using Janani.Services
@@ -16,7 +16,7 @@
 
 <div class="bloom-container">
     <div class="section-header">
-        <h1>🌼 @T("Title")</h1>
+        <h1><Icon Name="elder"/> @T("Title")</h1>
         <p class="subtitle">@T("Subtitle")</p>
     </div>
 
@@ -88,9 +88,9 @@
 
             @if (_activeAlert != null)
             {
-                <div class="sos-safety-note">
-                    <p>@(_activeAlert.Severity == AlertSeverity.Critical ? "🚨" : "⚠️") @_activeAlert.Message</p>
-                    <a class="bloom-btn primary small-btn" href="@($"/emergency?about=elder-{_selectedElder.Id}")">🆘 @T("SendSosBtn")</a>
+                <div class="sos-safety-note @(_activeAlert.Severity == AlertSeverity.Critical ? "is-critical" : "is-warning")">
+                    <p><Icon Name="sos" Size="16"/> @_activeAlert.Message</p>
+                    <a class="bloom-btn primary small-btn" href="@($"/emergency?about=elder-{_selectedElder.Id}")"><Icon Name="sos" Size="14"/> @T("SendSosBtn")</a>
                     <button class="bloom-btn secondary small-btn" @onclick="AcknowledgeAlertAsync">@T("SeenThisBtn")</button>
                 </div>
             }

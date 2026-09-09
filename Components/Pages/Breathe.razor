@@ -1,4 +1,4 @@
-@page "/breathe"
+﻿@page "/breathe"
 @using Microsoft.EntityFrameworkCore
 @inject AppDbContext Db
 @inject CurrentUserService CurrentUser
@@ -8,7 +8,7 @@
 
 <div class="bloom-container">
     <div class="section-header">
-        <h1>@T("Title")</h1>
+        <h1><Icon Name="breathe"/> @T("Title")</h1>
         <p class="subtitle">@T("Subtitle")</p>
     </div>
 

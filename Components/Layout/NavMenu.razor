@@ -1,4 +1,4 @@
-@inject NavigationManager Nav
+﻿@inject NavigationManager Nav
 @inject Janani.Services.UserProfileCache ProfileCache
 @rendermode InteractiveServer
 @implements IDisposable
@@ -11,23 +11,23 @@
         <ul class="nav" style="list-style:none; display:flex; gap:0.4rem; margin:0; padding:0; flex-wrap:wrap;">
             @if (_tracksPregnancy)
             {
-                <li class="nav-item"><NavLink class="nav-link" href="/" Match="NavLinkMatch.All">@T("Home")</NavLink></li>
+                <li class="nav-item"><NavLink class="nav-link" href="/" Match="NavLinkMatch.All"><Icon Name="home" Size="16"/> @T("Home")</NavLink></li>
             }
-            <li class="nav-item"><NavLink class="nav-link sos-link" href="/emergency">@T("SOS")</NavLink></li>
+            <li class="nav-item"><NavLink class="nav-link sos-link" href="/emergency"><Icon Name="sos" Size="16"/> @T("SOS")</NavLink></li>
 
             @if (_tracksPregnancy)
             {
                 <li class="nav-dropdown-wrap">
                     <details class="nav-dropdown">
-                        <summary class="nav-dropdown-toggle">@T("GroupPregnancy")</summary>
+                        <summary class="nav-dropdown-toggle"><Icon Name="pregnancy" Size="16"/> @T("GroupPregnancy")</summary>
                         <ul class="nav-dropdown-menu">
-                            <li><NavLink class="nav-link" href="/companion">@T("Companion")</NavLink></li>
-                            <li><NavLink class="nav-link" href="/vitals">@T("Vitals")</NavLink></li>
-                            <li><NavLink class="nav-link" href="/kicks">@T("Kicks")</NavLink></li>
-                            <li><NavLink class="nav-link" href="/meals">@T("Meals")</NavLink></li>
-                            <li><NavLink class="nav-link" href="/partner">@T("Partner")</NavLink></li>
-                            <li><NavLink class="nav-link" href="/birthplan">@T("BirthPlan")</NavLink></li>
-                            <li><NavLink class="nav-link" href="/journal">@T("Journal")</NavLink></li>
+                            <li><NavLink class="nav-link" href="/companion"><Icon Name="companion" Size="16"/> @T("Companion")</NavLink></li>
+                            <li><NavLink class="nav-link" href="/vitals"><Icon Name="vitals" Size="16"/> @T("Vitals")</NavLink></li>
+                            <li><NavLink class="nav-link" href="/kicks"><Icon Name="kicks" Size="16"/> @T("Kicks")</NavLink></li>
+                            <li><NavLink class="nav-link" href="/meals"><Icon Name="meals" Size="16"/> @T("Meals")</NavLink></li>
+                            <li><NavLink class="nav-link" href="/partner"><Icon Name="partner" Size="16"/> @T("Partner")</NavLink></li>
+                            <li><NavLink class="nav-link" href="/birthplan"><Icon Name="birthplan" Size="16"/> @T("BirthPlan")</NavLink></li>
+                            <li><NavLink class="nav-link" href="/journal"><Icon Name="journal" Size="16"/> @T("Journal")</NavLink></li>
                         </ul>
                     </details>
                 </li>
@@ -37,18 +37,18 @@
             {
                 <li class="nav-dropdown-wrap">
                     <details class="nav-dropdown">
-                        <summary class="nav-dropdown-toggle">@T("GroupNewbornPostpartum")</summary>
+                        <summary class="nav-dropdown-toggle"><Icon Name="baby" Size="16"/> @T("GroupNewbornPostpartum")</summary>
                         <ul class="nav-dropdown-menu">
                             @if (_caresForInfant)
                             {
-                                <li><NavLink class="nav-link" href="/infant-care">@T("InfantCare")</NavLink></li>
+                                <li><NavLink class="nav-link" href="/infant-care"><Icon Name="baby" Size="16"/> @T("InfantCare")</NavLink></li>
                             }
                             @if (_tracksPregnancy || _hasDelivered)
                             {
-                                <li><NavLink class="nav-link" href="/postpartum-checkin">@T("PostpartumCheckIn")</NavLink></li>
-                                <li><NavLink class="nav-link" href="/recovery-plan">@T("RecoveryPlan")</NavLink></li>
+                                <li><NavLink class="nav-link" href="/postpartum-checkin"><Icon Name="postpartumcheckin" Size="16"/> @T("PostpartumCheckIn")</NavLink></li>
+                                <li><NavLink class="nav-link" href="/recovery-plan"><Icon Name="recoveryplan" Size="16"/> @T("RecoveryPlan")</NavLink></li>
                             }
-                            <li><NavLink class="nav-link" href="/recipes">@T("Recipes")</NavLink></li>
+                            <li><NavLink class="nav-link" href="/recipes"><Icon Name="recipes" Size="16"/> @T("Recipes")</NavLink></li>
                         </ul>
                     </details>
                 </li>
@@ -58,22 +58,22 @@
             {
                 <li class="nav-dropdown-wrap">
                     <details class="nav-dropdown">
-                        <summary class="nav-dropdown-toggle">@T("GroupElderly")</summary>
+                        <summary class="nav-dropdown-toggle"><Icon Name="elder" Size="16"/> @T("GroupElderly")</summary>
                         <ul class="nav-dropdown-menu">
-                            <li><NavLink class="nav-link" href="/elder-care">@T("ElderCare")</NavLink></li>
+                            <li><NavLink class="nav-link" href="/elder-care"><Icon Name="elder" Size="16"/> @T("ElderCare")</NavLink></li>
                         </ul>
                     </details>
                 </li>
             }
 
-            <li class="nav-item"><NavLink class="nav-link" href="/family-care">@T("FamilyCare")</NavLink></li>
-            <li class="nav-item"><NavLink class="nav-link" href="/journey">@T("Journey")</NavLink></li>
-            <li class="nav-item"><NavLink class="nav-link" href="/appointments">@T("Appointments")</NavLink></li>
-            <li class="nav-item"><NavLink class="nav-link" href="/water">@T("Water")</NavLink></li>
-            <li class="nav-item"><NavLink class="nav-link" href="/medicine">@T("Meds")</NavLink></li>
-            <li class="nav-item"><NavLink class="nav-link" href="/breathe">@T("Breathe")</NavLink></li>
-            <li class="nav-item"><NavLink class="nav-link" href="/profile">@T("Profile")</NavLink></li>
-            <li class="nav-item"><NavLink class="nav-link" href="/settings">@T("Settings")</NavLink></li>
+            <li class="nav-item"><NavLink class="nav-link" href="/family-care"><Icon Name="family" Size="16"/> @T("FamilyCare")</NavLink></li>
+            <li class="nav-item"><NavLink class="nav-link" href="/journey"><Icon Name="journey" Size="16"/> @T("Journey")</NavLink></li>
+            <li class="nav-item"><NavLink class="nav-link" href="/appointments"><Icon Name="appointments" Size="16"/> @T("Appointments")</NavLink></li>
+            <li class="nav-item"><NavLink class="nav-link" href="/water"><Icon Name="water" Size="16"/> @T("Water")</NavLink></li>
+            <li class="nav-item"><NavLink class="nav-link" href="/medicine"><Icon Name="meds" Size="16"/> @T("Meds")</NavLink></li>
+            <li class="nav-item"><NavLink class="nav-link" href="/breathe"><Icon Name="breathe" Size="16"/> @T("Breathe")</NavLink></li>
+            <li class="nav-item"><NavLink class="nav-link" href="/profile"><Icon Name="profile" Size="16"/> @T("Profile")</NavLink></li>
+            <li class="nav-item"><NavLink class="nav-link" href="/settings"><Icon Name="settings" Size="16"/> @T("Settings")</NavLink></li>
         </ul>
     </nav>
     }
@@ -189,33 +189,33 @@
     {
         ["English"] = new()
         {
-            ["Home"] = "Home", ["SOS"] = "SOS 🆘", ["Companion"] = "Companion", ["Journal"] = "Journal",
-            ["Appointments"] = "Appointments", ["Water"] = "Water 💧", ["Meds"] = "Meds 💊", ["Kicks"] = "Kicks 🩷",
-            ["Breathe"] = "Breathe 🧘", ["Meals"] = "Meals 🍽️", ["Partner"] = "Partner 💌", ["BirthPlan"] = "Birth Plan 📋", ["Vitals"] = "Vitals 🩺",
-            ["Recipes"] = "Recipes 🍲", ["InfantCare"] = "Infant Care 👶", ["ElderCare"] = "Elder Care 🌼",
-            ["PostpartumCheckIn"] = "Daily Check-In 💗", ["RecoveryPlan"] = "Recovery Plan 🌷",
-            ["FamilyCare"] = "Family Care 👨‍👩‍👧", ["Journey"] = "Journey 🧭", ["Profile"] = "Profile 🌷", ["Settings"] = "Settings ⚙️", ["LogOut"] = "Log out",
-            ["GroupPregnancy"] = "Pregnancy 🤰", ["GroupNewbornPostpartum"] = "Newborn & Postpartum 👶", ["GroupElderly"] = "Elderly Care 🌼",
+            ["Home"] = "Home", ["SOS"] = "SOS", ["Companion"] = "Companion", ["Journal"] = "Journal",
+            ["Appointments"] = "Appointments", ["Water"] = "Water", ["Meds"] = "Meds", ["Kicks"] = "Kicks",
+            ["Breathe"] = "Breathe", ["Meals"] = "Meals", ["Partner"] = "Partner", ["BirthPlan"] = "Birth Plan", ["Vitals"] = "Vitals",
+            ["Recipes"] = "Recipes", ["InfantCare"] = "Infant Care", ["ElderCare"] = "Elder Care",
+            ["PostpartumCheckIn"] = "Daily Check-In", ["RecoveryPlan"] = "Recovery Plan",
+            ["FamilyCare"] = "Family Care", ["Journey"] = "Journey", ["Profile"] = "Profile", ["Settings"] = "Settings", ["LogOut"] = "Log out",
+            ["GroupPregnancy"] = "Pregnancy", ["GroupNewbornPostpartum"] = "Newborn & Postpartum", ["GroupElderly"] = "Elderly Care",
         },
         ["Hindi"] = new()
         {
-            ["Home"] = "होम", ["SOS"] = "SOS 🆘", ["Companion"] = "साथी", ["Journal"] = "डायरी",
-            ["Appointments"] = "अपॉइंटमेंट", ["Water"] = "पानी 💧", ["Meds"] = "दवाइयां 💊", ["Kicks"] = "हलचल 🩷",
-            ["Breathe"] = "सांस 🧘", ["Meals"] = "भोजन 🍽️", ["Partner"] = "पार्टनर 💌", ["BirthPlan"] = "प्रसव योजना 📋", ["Vitals"] = "वाइटल्स 🩺",
-            ["Recipes"] = "रेसिपी 🍲", ["InfantCare"] = "शिशु देखभाल 👶", ["ElderCare"] = "बुज़ुर्ग देखभाल 🌼",
-            ["PostpartumCheckIn"] = "दैनिक जांच 💗", ["RecoveryPlan"] = "रिकवरी योजना 🌷",
-            ["FamilyCare"] = "पारिवारिक देखभाल 👨‍👩‍👧", ["Journey"] = "यात्रा 🧭", ["Profile"] = "प्रोफ़ाइल 🌷", ["Settings"] = "सेटिंग्स ⚙️", ["LogOut"] = "लॉग आउट",
-            ["GroupPregnancy"] = "गर्भावस्था 🤰", ["GroupNewbornPostpartum"] = "नवजात और प्रसवोत्तर 👶", ["GroupElderly"] = "बुज़ुर्ग देखभाल 🌼",
+            ["Home"] = "होम", ["SOS"] = "SOS", ["Companion"] = "साथी", ["Journal"] = "डायरी",
+            ["Appointments"] = "अपॉइंटमेंट", ["Water"] = "पानी", ["Meds"] = "दवाइयां", ["Kicks"] = "हलचल",
+            ["Breathe"] = "सांस", ["Meals"] = "भोजन", ["Partner"] = "पार्टनर", ["BirthPlan"] = "प्रसव योजना", ["Vitals"] = "वाइटल्स",
+            ["Recipes"] = "रेसिपी", ["InfantCare"] = "शिशु देखभाल", ["ElderCare"] = "बुज़ुर्ग देखभाल",
+            ["PostpartumCheckIn"] = "दैनिक जांच", ["RecoveryPlan"] = "रिकवरी योजना",
+            ["FamilyCare"] = "पारिवारिक देखभाल", ["Journey"] = "यात्रा", ["Profile"] = "प्रोफ़ाइल", ["Settings"] = "सेटिंग्स", ["LogOut"] = "लॉग आउट",
+            ["GroupPregnancy"] = "गर्भावस्था", ["GroupNewbornPostpartum"] = "नवजात और प्रसवोत्तर", ["GroupElderly"] = "बुज़ुर्ग देखभाल",
         },
         ["Telugu"] = new()
         {
-            ["Home"] = "హోమ్", ["SOS"] = "SOS 🆘", ["Companion"] = "సహచరి", ["Journal"] = "డైరీ",
-            ["Appointments"] = "అపాయింట్‌మెంట్‌లు", ["Water"] = "నీరు 💧", ["Meds"] = "మందులు 💊", ["Kicks"] = "కదలికలు 🩷",
-            ["Breathe"] = "శ్వాస 🧘", ["Meals"] = "భోజనం 🍽️", ["Partner"] = "భాగస్వామి 💌", ["BirthPlan"] = "ప్రసవ ప్రణాళిక 📋", ["Vitals"] = "వైటల్స్ 🩺",
-            ["Recipes"] = "వంటకాలు 🍲", ["InfantCare"] = "శిశు సంరక్షణ 👶", ["ElderCare"] = "వృద్ధుల సంరక్షణ 🌼",
-            ["PostpartumCheckIn"] = "రోజువారీ చెక్-ఇన్ 💗", ["RecoveryPlan"] = "రికవరీ ప్రణాళిక 🌷",
-            ["FamilyCare"] = "కుటుంబ సంరక్షణ 👨‍👩‍👧", ["Journey"] = "ప్రయాణం 🧭", ["Profile"] = "ప్రొఫైల్ 🌷", ["Settings"] = "సెట్టింగ్‌లు ⚙️", ["LogOut"] = "లాగ్ అవుట్",
-            ["GroupPregnancy"] = "గర్భధారణ 🤰", ["GroupNewbornPostpartum"] = "నవజాత & ప్రసవానంతర 👶", ["GroupElderly"] = "వృద్ధుల సంరక్షణ 🌼",
+            ["Home"] = "హోమ్", ["SOS"] = "SOS", ["Companion"] = "సహచరి", ["Journal"] = "డైరీ",
+            ["Appointments"] = "అపాయింట్‌మెంట్‌లు", ["Water"] = "నీరు", ["Meds"] = "మందులు", ["Kicks"] = "కదలికలు",
+            ["Breathe"] = "శ్వాస", ["Meals"] = "భోజనం", ["Partner"] = "భాగస్వామి", ["BirthPlan"] = "ప్రసవ ప్రణాళిక", ["Vitals"] = "వైటల్స్",
+            ["Recipes"] = "వంటకాలు", ["InfantCare"] = "శిశు సంరక్షణ", ["ElderCare"] = "వృద్ధుల సంరక్షణ",
+            ["PostpartumCheckIn"] = "రోజువారీ చెక్-ఇన్", ["RecoveryPlan"] = "రికవరీ ప్రణాళిక",
+            ["FamilyCare"] = "కుటుంబ సంరక్షణ", ["Journey"] = "ప్రయాణం", ["Profile"] = "ప్రొఫైల్", ["Settings"] = "సెట్టింగ్‌లు", ["LogOut"] = "లాగ్ అవుట్",
+            ["GroupPregnancy"] = "గర్భధారణ", ["GroupNewbornPostpartum"] = "నవజాత & ప్రసవానంతర", ["GroupElderly"] = "వృద్ధుల సంరక్షణ",
         },
     };
 

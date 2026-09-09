@@ -1,4 +1,4 @@
-@page "/register"
+﻿@page "/register"
 @attribute [AllowAnonymous]
 @using System.ComponentModel.DataAnnotations
 @using System.Security.Claims
@@ -17,7 +17,7 @@
 <div class="bloom-container auth-container">
     <div class="auth-card">
         <div class="section-header">
-            <h1>🌸 Welcome to Janani</h1>
+            <h1>Welcome to Janani</h1>
             <p class="subtitle">Let's set up your own private space.</p>
         </div>
 
@@ -86,7 +86,7 @@
     </div>
 
     <dialog id="privacy-dialog" class="privacy-dialog">
-        <h1>🔒 Privacy Policy</h1>
+        <h1>Privacy Policy</h1>
         <PrivacyPolicyContent />
         <button type="button" class="bloom-btn secondary small-btn" onclick="document.getElementById('privacy-dialog').close()">Close</button>
     </dialog>

@@ -44,7 +44,7 @@ body { font-family: 'Segoe UI', system-ui, sans-serif; background: var(--cream);
 .auth-card .form-field { margin-bottom: 0.7rem; }
 .auth-card .validation-message { color: var(--urgent-deep); font-size: 0.8rem; display: block; margin-top: 0.3rem; }
 .auth-card button[type="submit"] { width: 100%; margin-top: 0.4rem; }
-.nav-item a { color: var(--text-soft); text-decoration: none; padding: 0.3rem 0.7rem; border-radius: 20px; transition: all 0.2s; font-size: 0.9rem; }
+.nav-item a { color: var(--text-soft); text-decoration: none; padding: 0.3rem 0.7rem; border-radius: 20px; transition: all 0.2s; font-size: 0.9rem; display: inline-flex; align-items: center; gap: 0.35rem; }
 .nav-item a:hover, .nav-item a.active { background: var(--rose-light); color: var(--rose-deep); }
 
 /* ── Nav dropdowns (life-stage groups: Pregnancy / Newborn & Postpartum /
@@ -55,7 +55,7 @@ body { font-family: 'Segoe UI', system-ui, sans-serif; background: var(--cream);
 .nav-dropdown-toggle {
     color: var(--text-soft); cursor: pointer; user-select: none; list-style: none;
     padding: 0.3rem 0.7rem; border-radius: 20px; font-size: 0.9rem; transition: all 0.2s;
-    display: inline-flex; align-items: center; gap: 0.25rem;
+    display: inline-flex; align-items: center; gap: 0.35rem;
 }
 .nav-dropdown-toggle::-webkit-details-marker { display: none; }
 .nav-dropdown-toggle::after { content: '▾'; font-size: 0.7em; }
@@ -67,15 +67,25 @@ body { font-family: 'Segoe UI', system-ui, sans-serif; background: var(--cream);
     padding: 0.4rem; min-width: 170px; list-style: none;
     display: flex; flex-direction: column; gap: 0.15rem;
 }
-.nav-dropdown-menu a.nav-link { display: block; padding: 0.4rem 0.7rem; border-radius: 8px; white-space: nowrap; color: var(--text-soft); text-decoration: none; font-size: 0.88rem; transition: all 0.2s; }
+.nav-dropdown-menu a.nav-link { display: flex; align-items: center; gap: 0.35rem; padding: 0.4rem 0.7rem; border-radius: 8px; white-space: nowrap; color: var(--text-soft); text-decoration: none; font-size: 0.88rem; transition: all 0.2s; }
 .nav-dropdown-menu a.nav-link:hover, .nav-dropdown-menu a.nav-link.active { background: var(--rose-light); color: var(--rose-deep); }
 
 .week-badge { display: inline-block; background: var(--sage-light); color: var(--sage); font-size: 0.8rem; font-weight: 600; padding: 0.25rem 0.7rem; border-radius: 20px; margin-bottom: 0.5rem; letter-spacing: 0.03em; }
 
-h1 { font-size: 1.5rem; color: var(--text); margin-bottom: 0.3rem; }
+h1 { font-size: 1.5rem; color: var(--text); margin-bottom: 0.3rem; display: flex; align-items: center; gap: 0.5rem; }
 h2 { font-size: 1.25rem; color: var(--text); margin-bottom: 0.6rem; }
 h3 { font-size: 0.95rem; color: var(--text); margin-bottom: 0.4rem; }
 .subtitle { color: var(--text-soft); font-size: 0.9rem; margin-bottom: 1rem; }
+
+/* ── Icon system (Components/Shared/Icon.razor) ────────────────────────────
+   Replaces the emoji previously used in nav, page headings and primary
+   buttons. stroke="currentColor" on the <svg> means every icon just inherits
+   whatever color its containing element already resolves to (nav link color,
+   button text color, heading color) — no separate icon-color rules needed
+   anywhere else in this file. */
+.janani-icon { flex-shrink: 0; vertical-align: -3px; }
+h1 .janani-icon { color: var(--rose-deep); width: 26px; height: 26px; }
+.bloom-btn .janani-icon { vertical-align: -2px; margin-right: 0.15rem; }
 
 /* Buttons */
 .bloom-btn { display: inline-block; border: none; border-radius: 25px; padding: 0.55rem 1.4rem; font-size: 0.95rem; font-weight: 600; cursor: pointer; transition: all 0.2s; text-decoration: none; text-align: center; }
@@ -99,8 +109,18 @@ h3 { font-size: 0.95rem; color: var(--text); margin-bottom: 0.4rem; }
 .mood-btn { display: flex; flex-direction: column; align-items: center; gap: 0.25rem; padding: 0.6rem 0.4rem; border: 2px solid var(--rose-light); border-radius: 14px; background: var(--white); cursor: pointer; transition: all 0.2s; }
 .mood-btn:hover { border-color: var(--rose); background: var(--rose-light); }
 .mood-btn.selected { border-color: var(--rose-deep); background: var(--rose-light); }
-.mood-emoji { font-size: 1.6rem; }
-.mood-label { font-size: 0.72rem; color: var(--text-soft); font-weight: 500; }
+/* A giant raw emoji face was the single biggest "cute app for kids" signal
+   on the whole surface — reads out of place on a caregiving tool that also
+   has to carry a Critical medical alert. Same emoji, but sized down and set
+   inside a soft circular chip so it reads as a designed accent rather than
+   the dominant visual; the label carries more weight now. */
+.mood-emoji {
+    font-size: 1.05rem; width: 2rem; height: 2rem; border-radius: 50%;
+    background: var(--rose-light); display: flex; align-items: center;
+    justify-content: center; line-height: 1;
+}
+.mood-btn.selected .mood-emoji { background: var(--white); }
+.mood-label { font-size: 0.75rem; color: var(--text); font-weight: 600; }
 
 .note-section { margin-bottom: 1rem; }
 .note-section label { display: block; font-size: 0.87rem; color: var(--text-soft); margin-bottom: 0.3rem; }
@@ -566,6 +586,15 @@ textarea:focus { outline: none; border-color: var(--rose); }
 .plan-document { animation: fadeIn 0.5s ease; }
 
 /* ── Emergency / distress contacts ─────────────────────────────────────── */
+/* Severity is color, not a different emoji, now — same Icon="sos" glyph for
+   both, since the shape doesn't need to change to read as more or less
+   urgent; only .is-warning overrides the default (Critical/red) styling.
+   This replaced a 🚨-vs-⚠️ ternary, which put a cartoon icon directly beside
+   a real medical reading (e.g. "Systolic BP 203") and undercut exactly the
+   moment the app most needs to read as credible. */
+.sos-safety-note.is-warning { background: #fdf3e0; border-color: rgba(232,184,75,0.35); color: #8a6a1a; }
+.sos-safety-note p .janani-icon { vertical-align: -3px; margin-right: 0.1rem; }
+
 .sos-safety-note {
     background: var(--urgent-light);
     border: 1.5px solid rgba(226,102,95,0.25);
