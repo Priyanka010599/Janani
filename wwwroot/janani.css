@@ -281,6 +281,8 @@ textarea:focus { outline: none; border-color: var(--rose); }
 .form-field input { width: 100%; border: 1.5px solid var(--rose-light); border-radius: 10px; padding: 0.55rem 0.65rem; font-size: 0.92rem; font-family: inherit; background: var(--cream); color: var(--text); }
 .form-field input:focus { outline: none; border-color: var(--rose); }
 .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 0.7rem; }
+.form-row > input { width: 100%; border: 1.5px solid var(--rose-light); border-radius: 10px; padding: 0.55rem 0.65rem; font-size: 0.92rem; font-family: inherit; background: var(--cream); color: var(--text); }
+.form-row > input:focus { outline: none; border-color: var(--rose); }
 .form-actions { display: flex; flex-wrap: wrap; gap: 0.6rem; margin-top: 0.7rem; }
 .visit-title { color: var(--text-soft); font-size: 0.87rem; margin-bottom: 0.6rem; }
 .appointments-list { display: flex; flex-direction: column; gap: 0.7rem; }
@@ -582,6 +584,40 @@ textarea:focus { outline: none; border-color: var(--rose); }
     box-shadow: var(--shadow);
     margin-bottom: 1rem;
     border-left: 4px solid var(--urgent);
+}
+
+/* Native <dialog>-based popup (Privacy Policy) -- no JS framework needed,
+   showModal()/close() are plain DOM calls that work on both interactive and
+   static-rendered pages. */
+dialog.privacy-dialog {
+    max-width: 640px;
+    width: 92vw;
+    max-height: 85vh;
+    overflow-y: auto;
+    border: none;
+    border-radius: 18px;
+    padding: 1.4rem;
+    background: var(--cream);
+    color: var(--text);
+    box-shadow: var(--shadow);
+}
+dialog.privacy-dialog::backdrop {
+    background: rgba(74, 63, 58, 0.45);
+}
+dialog.privacy-dialog h1 {
+    margin-top: 0;
+}
+
+/* A link that behaves like a button (inline with text, no navigation) --
+   used for "Privacy Policy" inside the sign-up consent checkbox label. */
+.link-btn {
+    background: none;
+    border: none;
+    padding: 0;
+    color: var(--rose-deep);
+    text-decoration: underline;
+    cursor: pointer;
+    font: inherit;
 }
 .sos-hint { color: var(--text-soft); font-size: 0.85rem; margin-bottom: 0.5rem; }
 .sos-message {

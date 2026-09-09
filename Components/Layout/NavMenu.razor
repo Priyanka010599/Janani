@@ -1,9 +1,12 @@
 @inject NavigationManager Nav
 @inject Janani.Services.UserProfileCache ProfileCache
+@rendermode InteractiveServer
 @implements IDisposable
 
 <div class="navbar">
     <a class="navbar-brand" href="/">🌸 Janani</a>
+    @if (_isAuthenticated)
+    {
     <nav>
         <ul class="nav" style="list-style:none; display:flex; gap:0.4rem; margin:0; padding:0; flex-wrap:wrap;">
             @if (_tracksPregnancy)
@@ -19,16 +22,18 @@
                         <summary class="nav-dropdown-toggle">@T("GroupPregnancy")</summary>
                         <ul class="nav-dropdown-menu">
                             <li><NavLink class="nav-link" href="/companion">@T("Companion")</NavLink></li>
+                            <li><NavLink class="nav-link" href="/vitals">@T("Vitals")</NavLink></li>
                             <li><NavLink class="nav-link" href="/kicks">@T("Kicks")</NavLink></li>
                             <li><NavLink class="nav-link" href="/meals">@T("Meals")</NavLink></li>
                             <li><NavLink class="nav-link" href="/partner">@T("Partner")</NavLink></li>
                             <li><NavLink class="nav-link" href="/birthplan">@T("BirthPlan")</NavLink></li>
+                            <li><NavLink class="nav-link" href="/journal">@T("Journal")</NavLink></li>
                         </ul>
                     </details>
                 </li>
             }
 
-            @if (_tracksPregnancy || _caresForInfant)
+            @if (_tracksPregnancy || _caresForInfant || _hasDelivered)
             {
                 <li class="nav-dropdown-wrap">
                     <details class="nav-dropdown">
@@ -37,6 +42,11 @@
                             @if (_caresForInfant)
                             {
                                 <li><NavLink class="nav-link" href="/infant-care">@T("InfantCare")</NavLink></li>
+                            }
+                            @if (_tracksPregnancy || _hasDelivered)
+                            {
+                                <li><NavLink class="nav-link" href="/postpartum-checkin">@T("PostpartumCheckIn")</NavLink></li>
+                                <li><NavLink class="nav-link" href="/recovery-plan">@T("RecoveryPlan")</NavLink></li>
                             }
                             <li><NavLink class="nav-link" href="/recipes">@T("Recipes")</NavLink></li>
                         </ul>
@@ -57,7 +67,7 @@
             }
 
             <li class="nav-item"><NavLink class="nav-link" href="/family-care">@T("FamilyCare")</NavLink></li>
-            <li class="nav-item"><NavLink class="nav-link" href="/journal">@T("Journal")</NavLink></li>
+            <li class="nav-item"><NavLink class="nav-link" href="/journey">@T("Journey")</NavLink></li>
             <li class="nav-item"><NavLink class="nav-link" href="/appointments">@T("Appointments")</NavLink></li>
             <li class="nav-item"><NavLink class="nav-link" href="/water">@T("Water")</NavLink></li>
             <li class="nav-item"><NavLink class="nav-link" href="/medicine">@T("Meds")</NavLink></li>
@@ -66,6 +76,7 @@
             <li class="nav-item"><NavLink class="nav-link" href="/settings">@T("Settings")</NavLink></li>
         </ul>
     </nav>
+    }
     <AuthorizeView>
         <Authorized>
             <div class="nav-account">
@@ -79,23 +90,49 @@
 @code {
     // Pregnancy-specific pages (Home's mood check-in, Companion, Kicks, Meals,
     // Partner, Birth Plan) only show for a profile tracking a pregnancy —
-    // see UserProfile.TracksPregnancy. Elder Care/Infant Care are similarly
-    // gated on their own CaresForElder/CaresForInfant flags, set at signup
-    // and editable anytime in Profile.razor — not everyone caring for one
-    // is also caring for the other. SOS, Family Care, and general trackers
-    // (Journal, Appointments, Water, Meds, Breathe) always show.
+    // see UserProfile.TracksPregnancy. Postpartum Check-In/Recovery Plan are
+    // about the pregnant/postpartum person's own body, so they're gated on
+    // TracksPregnancy OR _hasDelivered, NOT on CaresForInfant -- caring for a
+    // baby doesn't mean you were the one who was pregnant (e.g. a partner or
+    // grandparent caring for the infant only). The OR-delivered half matters
+    // because Profile.razor's own hint tells mothers to turn TracksPregnancy
+    // off "after the baby arrives" -- without also checking _hasDelivered,
+    // doing exactly that would hide postpartum recovery right when it's
+    // needed most. Elder Care/Infant Care are similarly gated on their own
+    // CaresForElder/CaresForInfant flags, set at signup and editable anytime
+    // in Profile.razor — not everyone caring for one is also caring for the
+    // other. SOS, Family Care, and general trackers (Journal, Appointments,
+    // Water, Meds, Breathe) always show.
     //
     // Grouped into three life-stage dropdowns (Pregnancy / Newborn &
     // Postpartum / Elderly) rather than one long flat list — the general
-    // day-to-day trackers (Journal, Appointments, Water, Meds, Breathe)
-    // stay flat since they're used across every life stage, not specific
-    // to one. Recipes lives under Newborn & Postpartum (it covers both
-    // first-foods and postpartum-recovery content) and is visible to a
-    // still-pregnant user too, same as before this grouping existed.
+    // day-to-day trackers (Appointments, Water, Meds, Breathe) stay flat
+    // since they're used across every life stage, not specific to one.
+    // Journal lives under Pregnancy specifically (not flat) and so only
+    // shows for a profile tracking a pregnancy. Recipes lives under
+    // Newborn & Postpartum (it covers both first-foods and
+    // postpartum-recovery content) and is visible to a still-pregnant
+    // user too, same as before this grouping existed.
     [CascadingParameter]
     private Task<AuthenticationState>? AuthStateTask { get; set; }
 
+    // Gates the entire nav list, not just individual groups -- an anonymous
+    // visitor (login/register pages) has no profile to check flags against,
+    // and every one of these routes redirects back to /login anyway (global
+    // FallbackPolicy in Program.cs), so there's nothing real to show them.
+    // Without this, _tracksPregnancy's default below (true, meant for "no
+    // profile row yet" on an authenticated account) was leaking through and
+    // showing the Pregnancy/Postpartum groups even while logged out.
+    private bool _isAuthenticated;
     private bool _tracksPregnancy = true;
+    // PostpartumDay != null is the same signal RecoveryPlan.razor/
+    // PostpartumCheckIn.razor use to decide whether to show real content vs.
+    // their "no delivery date on file yet" empty state -- using it here too
+    // means those nav items stay reachable after a mother delivers and
+    // unchecks "I'm currently pregnant" (Profile.razor's own hint text says
+    // to do exactly that "after the baby arrives"), instead of vanishing
+    // right when postpartum recovery tracking actually matters.
+    private bool _hasDelivered;
     private bool _caresForElder;
     private bool _caresForInfant;
     private string _language = "English";
@@ -104,7 +141,8 @@
     {
         if (AuthStateTask == null) return;
         var authState = await AuthStateTask;
-        if (authState.User.Identity?.IsAuthenticated != true) return;
+        _isAuthenticated = authState.User.Identity?.IsAuthenticated == true;
+        if (!_isAuthenticated) return;
 
         await RefreshProfileFlagsAsync();
         ProfileCache.Changed += OnProfileChanged;
@@ -129,8 +167,13 @@
         // one query instead of racing on the same scoped DbContext instance.
         var profile = await ProfileCache.GetAsync();
         _tracksPregnancy = profile?.TracksPregnancy ?? true;
+        _hasDelivered = profile?.PostpartumDay != null;
         _caresForElder = profile?.CaresForElder ?? false;
-        _caresForInfant = profile?.CaresForInfant ?? false;
+        // Also requires HasAnySurvivingInfant — a bereaved profile with no
+        // surviving infant loses this nav item even if CaresForInfant was
+        // left on from before the outcome was recorded. PartialLossMultiple
+        // keeps it (its surviving child still needs this section).
+        _caresForInfant = (profile?.CaresForInfant ?? false) && (profile?.CareContext.HasAnySurvivingInfant ?? true);
         _language = (profile?.Language ?? Janani.Services.AppLanguage.English).ToString();
     }
 
@@ -148,27 +191,30 @@
         {
             ["Home"] = "Home", ["SOS"] = "SOS 🆘", ["Companion"] = "Companion", ["Journal"] = "Journal",
             ["Appointments"] = "Appointments", ["Water"] = "Water 💧", ["Meds"] = "Meds 💊", ["Kicks"] = "Kicks 🩷",
-            ["Breathe"] = "Breathe 🧘", ["Meals"] = "Meals 🍽️", ["Partner"] = "Partner 💌", ["BirthPlan"] = "Birth Plan 📋",
+            ["Breathe"] = "Breathe 🧘", ["Meals"] = "Meals 🍽️", ["Partner"] = "Partner 💌", ["BirthPlan"] = "Birth Plan 📋", ["Vitals"] = "Vitals 🩺",
             ["Recipes"] = "Recipes 🍲", ["InfantCare"] = "Infant Care 👶", ["ElderCare"] = "Elder Care 🌼",
-            ["FamilyCare"] = "Family Care 👨‍👩‍👧", ["Profile"] = "Profile 🌷", ["Settings"] = "Settings ⚙️", ["LogOut"] = "Log out",
+            ["PostpartumCheckIn"] = "Daily Check-In 💗", ["RecoveryPlan"] = "Recovery Plan 🌷",
+            ["FamilyCare"] = "Family Care 👨‍👩‍👧", ["Journey"] = "Journey 🧭", ["Profile"] = "Profile 🌷", ["Settings"] = "Settings ⚙️", ["LogOut"] = "Log out",
             ["GroupPregnancy"] = "Pregnancy 🤰", ["GroupNewbornPostpartum"] = "Newborn & Postpartum 👶", ["GroupElderly"] = "Elderly Care 🌼",
         },
         ["Hindi"] = new()
         {
             ["Home"] = "होम", ["SOS"] = "SOS 🆘", ["Companion"] = "साथी", ["Journal"] = "डायरी",
             ["Appointments"] = "अपॉइंटमेंट", ["Water"] = "पानी 💧", ["Meds"] = "दवाइयां 💊", ["Kicks"] = "हलचल 🩷",
-            ["Breathe"] = "सांस 🧘", ["Meals"] = "भोजन 🍽️", ["Partner"] = "पार्टनर 💌", ["BirthPlan"] = "प्रसव योजना 📋",
+            ["Breathe"] = "सांस 🧘", ["Meals"] = "भोजन 🍽️", ["Partner"] = "पार्टनर 💌", ["BirthPlan"] = "प्रसव योजना 📋", ["Vitals"] = "वाइटल्स 🩺",
             ["Recipes"] = "रेसिपी 🍲", ["InfantCare"] = "शिशु देखभाल 👶", ["ElderCare"] = "बुज़ुर्ग देखभाल 🌼",
-            ["FamilyCare"] = "पारिवारिक देखभाल 👨‍👩‍👧", ["Profile"] = "प्रोफ़ाइल 🌷", ["Settings"] = "सेटिंग्स ⚙️", ["LogOut"] = "लॉग आउट",
+            ["PostpartumCheckIn"] = "दैनिक जांच 💗", ["RecoveryPlan"] = "रिकवरी योजना 🌷",
+            ["FamilyCare"] = "पारिवारिक देखभाल 👨‍👩‍👧", ["Journey"] = "यात्रा 🧭", ["Profile"] = "प्रोफ़ाइल 🌷", ["Settings"] = "सेटिंग्स ⚙️", ["LogOut"] = "लॉग आउट",
             ["GroupPregnancy"] = "गर्भावस्था 🤰", ["GroupNewbornPostpartum"] = "नवजात और प्रसवोत्तर 👶", ["GroupElderly"] = "बुज़ुर्ग देखभाल 🌼",
         },
         ["Telugu"] = new()
         {
             ["Home"] = "హోమ్", ["SOS"] = "SOS 🆘", ["Companion"] = "సహచరి", ["Journal"] = "డైరీ",
             ["Appointments"] = "అపాయింట్‌మెంట్‌లు", ["Water"] = "నీరు 💧", ["Meds"] = "మందులు 💊", ["Kicks"] = "కదలికలు 🩷",
-            ["Breathe"] = "శ్వాస 🧘", ["Meals"] = "భోజనం 🍽️", ["Partner"] = "భాగస్వామి 💌", ["BirthPlan"] = "ప్రసవ ప్రణాళిక 📋",
+            ["Breathe"] = "శ్వాస 🧘", ["Meals"] = "భోజనం 🍽️", ["Partner"] = "భాగస్వామి 💌", ["BirthPlan"] = "ప్రసవ ప్రణాళిక 📋", ["Vitals"] = "వైటల్స్ 🩺",
             ["Recipes"] = "వంటకాలు 🍲", ["InfantCare"] = "శిశు సంరక్షణ 👶", ["ElderCare"] = "వృద్ధుల సంరక్షణ 🌼",
-            ["FamilyCare"] = "కుటుంబ సంరక్షణ 👨‍👩‍👧", ["Profile"] = "ప్రొఫైల్ 🌷", ["Settings"] = "సెట్టింగ్‌లు ⚙️", ["LogOut"] = "లాగ్ అవుట్",
+            ["PostpartumCheckIn"] = "రోజువారీ చెక్-ఇన్ 💗", ["RecoveryPlan"] = "రికవరీ ప్రణాళిక 🌷",
+            ["FamilyCare"] = "కుటుంబ సంరక్షణ 👨‍👩‍👧", ["Journey"] = "ప్రయాణం 🧭", ["Profile"] = "ప్రొఫైల్ 🌷", ["Settings"] = "సెట్టింగ్‌లు ⚙️", ["LogOut"] = "లాగ్ అవుట్",
             ["GroupPregnancy"] = "గర్భధారణ 🤰", ["GroupNewbornPostpartum"] = "నవజాత & ప్రసవానంతర 👶", ["GroupElderly"] = "వృద్ధుల సంరక్షణ 🌼",
         },
     };

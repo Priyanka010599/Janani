@@ -1,0 +1,302 @@
+@page "/recovery-plan"
+@using Janani.Models
+@using Janani.Data
+@using Janani.Services
+@using Microsoft.EntityFrameworkCore
+@inject AppDbContext Db
+@inject CurrentUserService CurrentUser
+@inject UserProfileCache ProfileCache
+@rendermode InteractiveServer
+
+<PageTitle>Janani — Recovery Plan</PageTitle>
+
+<div class="bloom-container">
+    <div class="section-header">
+        <h1>🌷 @T("Title")</h1>
+        <p class="subtitle">@T("Subtitle")</p>
+    </div>
+
+    @if (_postpartumDay == null)
+    {
+        <div class="empty-state">
+            <p>@T("NotYetTitle")</p>
+            <p>@T("NotYetHint")</p>
+        </div>
+    }
+    else
+    {
+        <div class="plan-card urgent-card">
+            <h3>🚩 @T("RedFlagsTitle")</h3>
+            <p class="sos-hint">@T("RedFlagsHint")</p>
+            <ul>
+                @foreach (var flag in RecoveryPlanGenerator.RedFlags)
+                {
+                    <li>@flag.Text <span class="sos-hint">(@flag.SourceRef)</span></li>
+                }
+            </ul>
+        </div>
+
+        <div class="plan-card">
+            <h3>🏠 @T("HbncTitle")</h3>
+            <p class="sos-hint">@T("HbncHint")</p>
+            <ul>
+                @foreach (var visit in _hbncVisits)
+                {
+                    <li>
+                        <button type="button" class="icon-btn @(visit.Status == HbncVisitStatus.Completed ? "is-done" : "")" title="@T("MarkDone")" aria-label="@T("MarkDone")"
+                                @onclick="() => ToggleCompletionAsync(visit.Visit.Key)">
+                            @(visit.Status == HbncVisitStatus.Completed ? "✓" : "○")
+                        </button>
+                        @string.Format(T("HbncDayLabel"), visit.Visit.Day)
+                        <span class="sos-hint">— @HbncStatusLabel(visit.Status)</span>
+                    </li>
+                }
+            </ul>
+        </div>
+
+        @foreach (var phase in _phases)
+        {
+            <div class="plan-card @(phase == _currentPhase ? "is-current-phase" : "")">
+                <h3>@PhaseLabel(phase) @(phase == _currentPhase ? $"— {T("CurrentPhase")}" : "")</h3>
+                @foreach (var categoryGroup in RecoveryPlanGenerator.GeneralContentForPhase(phase).GroupBy(i => i.Category))
+                {
+                    <h4>@CategoryLabel(categoryGroup.Key)</h4>
+                    <ul>
+                        @foreach (var item in categoryGroup)
+                        {
+                            <li>
+                                <button type="button" class="icon-btn @(_completedKeys.Contains(item.Key) ? "is-done" : "")" title="@T("MarkDone")" aria-label="@T("MarkDone")"
+                                        @onclick="() => ToggleCompletionAsync(item.Key)">
+                                    @(_completedKeys.Contains(item.Key) ? "✓" : "○")
+                                </button>
+                                @item.Text
+                                <span class="sos-hint">(@item.SourceRef)</span>
+                            </li>
+                        }
+                    </ul>
+                }
+            </div>
+        }
+
+        <div class="plan-card">
+            <h3>🩺 @T("AskDoctorTitle")</h3>
+            <p class="sos-hint">@T("AskDoctorHint")</p>
+            @if (_doctorPrompts.Count == 0)
+            {
+                <p class="sos-hint">@T("NoPromptsYet")</p>
+            }
+            else
+            {
+                <ul>
+                    @foreach (var prompt in _doctorPrompts)
+                    {
+                        <li>@prompt.Prompt <span class="sos-hint">(@prompt.SourceRef)</span></li>
+                    }
+                </ul>
+            }
+        </div>
+    }
+</div>
+
+@code {
+    private int _userId;
+    private string _language = "English";
+    private int? _postpartumDay;
+    private RecoveryPhase? _currentPhase;
+    private readonly RecoveryPhase[] _phases =
+    [
+        RecoveryPhase.Days0to2, RecoveryPhase.Days3to7, RecoveryPhase.Days8to42, RecoveryPhase.Day43Plus
+    ];
+    private List<AskYourDoctorPrompt> _doctorPrompts = [];
+    private HashSet<string> _completedKeys = [];
+    private List<HbncVisitSchedule.VisitWithStatus> _hbncVisits = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        _userId = await CurrentUser.GetUserIdAsync();
+        var profile = await ProfileCache.GetAsync();
+        _language = (profile?.Language ?? AppLanguage.English).ToString();
+        _postpartumDay = profile?.PostpartumDay;
+
+        if (_postpartumDay == null) return;
+
+        _currentPhase = RecoveryPlanGenerator.PhaseForDay(_postpartumDay);
+        _doctorPrompts = RecoveryPlanGenerator.DoctorPromptsFor(
+            profile!.DeliveryType, profile.DeliveryComplications, profile.CareContext).ToList();
+
+        var completions = await Db.RecoveryPlanItemCompletions.AsNoTracking()
+            .Where(c => c.UserId == _userId)
+            .Select(c => new { c.ItemKey, c.CompletedAt })
+            .ToListAsync();
+        _completedKeys = completions.Select(c => c.ItemKey).ToHashSet();
+
+        // HBNC visit completion is recorded through this exact same
+        // RecoveryPlanItemCompletion table, keyed by HbncVisitSchedule's
+        // own "hbnc-dayN" keys -- no separate visit table.
+        var completedAtByKey = completions.ToDictionary(c => c.ItemKey, c => c.CompletedAt);
+        _hbncVisits = HbncVisitSchedule.BuildStatus(_postpartumDay, completedAtByKey);
+    }
+
+    private async Task ToggleCompletionAsync(string itemKey)
+    {
+        if (_completedKeys.Contains(itemKey))
+        {
+            var existing = await Db.RecoveryPlanItemCompletions
+                .FirstOrDefaultAsync(c => c.UserId == _userId && c.ItemKey == itemKey);
+            if (existing != null)
+            {
+                Db.RecoveryPlanItemCompletions.Remove(existing);
+                await Db.SaveChangesAsync();
+            }
+            _completedKeys.Remove(itemKey);
+        }
+        else
+        {
+            Db.RecoveryPlanItemCompletions.Add(new RecoveryPlanItemCompletion { UserId = _userId, ItemKey = itemKey });
+            await Db.SaveChangesAsync();
+            _completedKeys.Add(itemKey);
+        }
+
+        // Refresh HBNC status too -- itemKey may be one of its "hbnc-dayN"
+        // keys, and its displayed status (and CompletedAt) needs to
+        // reflect the toggle immediately, not just after a reload.
+        var completedAtByKey = (await Db.RecoveryPlanItemCompletions.AsNoTracking()
+            .Where(c => c.UserId == _userId)
+            .Select(c => new { c.ItemKey, c.CompletedAt })
+            .ToListAsync()).ToDictionary(c => c.ItemKey, c => c.CompletedAt);
+        _hbncVisits = HbncVisitSchedule.BuildStatus(_postpartumDay, completedAtByKey);
+    }
+
+    private string HbncStatusLabel(HbncVisitStatus status) => status switch
+    {
+        HbncVisitStatus.Completed => T("HbncCompleted"),
+        HbncVisitStatus.Overdue => T("HbncOverdue"),
+        HbncVisitStatus.DueNow => T("HbncDueNow"),
+        _ => T("HbncUpcoming")
+    };
+
+    private string PhaseLabel(RecoveryPhase phase) => phase switch
+    {
+        RecoveryPhase.Days0to2 => T("PhaseDays0to2"),
+        RecoveryPhase.Days3to7 => T("PhaseDays3to7"),
+        RecoveryPhase.Days8to42 => T("PhaseDays8to42"),
+        _ => T("PhaseDay43Plus")
+    };
+
+    private string CategoryLabel(RecoveryCategory category) => category switch
+    {
+        RecoveryCategory.WoundCare => T("CategoryWoundCare"),
+        RecoveryCategory.Pain => T("CategoryPain"),
+        RecoveryCategory.MobilityExercise => T("CategoryMobilityExercise"),
+        RecoveryCategory.Bleeding => T("CategoryBleeding"),
+        RecoveryCategory.BladderBowel => T("CategoryBladderBowel"),
+        RecoveryCategory.NutritionSleep => T("CategoryNutritionSleep"),
+        RecoveryCategory.MentalHealth => T("CategoryMentalHealth"),
+        _ => category.ToString()
+    };
+
+    private static readonly Dictionary<string, Dictionary<string, string>> Strings = new()
+    {
+        ["English"] = new()
+        {
+            ["Title"] = "Recovery Plan",
+            ["Subtitle"] = "The same general postpartum information for every mother, organized by how many days it's been since delivery — your doctor is the one who tailors anything to you specifically.",
+            ["NotYetTitle"] = "No delivery date on file yet",
+            ["NotYetHint"] = "Once your delivery date is recorded on your profile, your recovery plan will appear here.",
+            ["RedFlagsTitle"] = "Red flags — call your provider or seek urgent care",
+            ["RedFlagsHint"] = "This list is the same for every mother, at every stage — it is never filtered or changed.",
+            ["CurrentPhase"] = "where you are now",
+            ["AskDoctorTitle"] = "Topics to ask your doctor about",
+            ["AskDoctorHint"] = "These are nudges to raise with your own provider — not instructions on what to do.",
+            ["NoPromptsYet"] = "No specific topics flagged for you right now.",
+            ["MarkDone"] = "Mark as done",
+            ["HbncTitle"] = "HBNC Home Visits",
+            ["HbncHint"] = "Home Based Newborn Care visits, checking on both you and your baby. No push reminders yet — this list just shows where things stand when you open the app.",
+            ["HbncDayLabel"] = "Day {0} visit",
+            ["HbncCompleted"] = "Completed",
+            ["HbncOverdue"] = "Overdue",
+            ["HbncDueNow"] = "Due now",
+            ["HbncUpcoming"] = "Upcoming",
+            ["PhaseDays0to2"] = "Days 0–2",
+            ["PhaseDays3to7"] = "Days 3–7",
+            ["PhaseDays8to42"] = "Days 8–42 (weeks 2–6)",
+            ["PhaseDay43Plus"] = "Day 43+ (6 weeks and beyond)",
+            ["CategoryWoundCare"] = "Wound Care",
+            ["CategoryPain"] = "Pain",
+            ["CategoryMobilityExercise"] = "Mobility & Exercise",
+            ["CategoryBleeding"] = "Bleeding",
+            ["CategoryBladderBowel"] = "Bladder & Bowel",
+            ["CategoryNutritionSleep"] = "Nutrition & Sleep",
+            ["CategoryMentalHealth"] = "Mental Health",
+        },
+        ["Hindi"] = new()
+        {
+            ["Title"] = "रिकवरी योजना",
+            ["Subtitle"] = "हर माँ के लिए एक जैसी सामान्य प्रसवोत्तर जानकारी, प्रसव के बाद के दिनों के अनुसार व्यवस्थित — आपके लिए विशेष रूप से कुछ भी तय करना आपके डॉक्टर का काम है।",
+            ["NotYetTitle"] = "अभी तक कोई प्रसव तिथि दर्ज नहीं है",
+            ["NotYetHint"] = "एक बार आपकी प्रसव तिथि आपकी प्रोफ़ाइल पर दर्ज हो जाने पर, आपकी रिकवरी योजना यहाँ दिखाई देगी।",
+            ["RedFlagsTitle"] = "चेतावनी संकेत — अपने डॉक्टर को कॉल करें या तुरंत देखभाल लें",
+            ["RedFlagsHint"] = "यह सूची हर माँ के लिए, हर चरण में एक जैसी है — इसे कभी फ़िल्टर या बदला नहीं जाता।",
+            ["CurrentPhase"] = "आप अभी यहाँ हैं",
+            ["AskDoctorTitle"] = "अपने डॉक्टर से पूछने के विषय",
+            ["AskDoctorHint"] = "ये आपके अपने डॉक्टर के साथ उठाने के संकेत हैं — क्या करना है इसके निर्देश नहीं।",
+            ["NoPromptsYet"] = "अभी आपके लिए कोई विशेष विषय चिह्नित नहीं है।",
+            ["MarkDone"] = "पूर्ण के रूप में चिह्नित करें",
+            ["HbncTitle"] = "HBNC घर विज़िट",
+            ["HbncHint"] = "होम बेस्ड न्यूबॉर्न केयर विज़िट, जो आप और आपके शिशु दोनों की जांच करती हैं। अभी पुश रिमाइंडर नहीं हैं — यह सूची केवल यह दिखाती है कि जब आप ऐप खोलती हैं तो स्थिति क्या है।",
+            ["HbncDayLabel"] = "दिन {0} विज़िट",
+            ["HbncCompleted"] = "पूर्ण",
+            ["HbncOverdue"] = "समय निकल गया",
+            ["HbncDueNow"] = "अभी देय",
+            ["HbncUpcoming"] = "आगामी",
+            ["PhaseDays0to2"] = "दिन 0–2",
+            ["PhaseDays3to7"] = "दिन 3–7",
+            ["PhaseDays8to42"] = "दिन 8–42 (सप्ताह 2–6)",
+            ["PhaseDay43Plus"] = "दिन 43+ (6 सप्ताह और उससे आगे)",
+            ["CategoryWoundCare"] = "घाव की देखभाल",
+            ["CategoryPain"] = "दर्द",
+            ["CategoryMobilityExercise"] = "गतिशीलता और व्यायाम",
+            ["CategoryBleeding"] = "रक्तस्राव",
+            ["CategoryBladderBowel"] = "मूत्राशय और मल त्याग",
+            ["CategoryNutritionSleep"] = "पोषण और नींद",
+            ["CategoryMentalHealth"] = "मानसिक स्वास्थ्य",
+        },
+        ["Telugu"] = new()
+        {
+            ["Title"] = "రికవరీ ప్రణాళిక",
+            ["Subtitle"] = "ప్రతి తల్లికి ఒకే విధమైన సాధారణ ప్రసవానంతర సమాచారం, ప్రసవం తర్వాత ఎన్ని రోజులు అయిందో దాని ప్రకారం అమర్చబడింది — మీ కోసం ప్రత్యేకంగా ఏదైనా రూపొందించేది మీ డాక్టర్.",
+            ["NotYetTitle"] = "ఇంకా ప్రసవ తేదీ నమోదు కాలేదు",
+            ["NotYetHint"] = "మీ ప్రొఫైల్‌లో మీ ప్రసవ తేదీ నమోదైన తర్వాత, మీ రికవరీ ప్రణాళిక ఇక్కడ కనిపిస్తుంది.",
+            ["RedFlagsTitle"] = "హెచ్చరిక సంకేతాలు — మీ డాక్టర్‌ను సంప్రదించండి లేదా వెంటనే సంరక్షణ పొందండి",
+            ["RedFlagsHint"] = "ఈ జాబితా ప్రతి తల్లికి, ప్రతి దశలో ఒకేలా ఉంటుంది — దీన్ని ఎప్పుడూ ఫిల్టర్ చేయరు లేదా మార్చరు.",
+            ["CurrentPhase"] = "మీరు ఇప్పుడు ఇక్కడ ఉన్నారు",
+            ["AskDoctorTitle"] = "మీ డాక్టర్‌ను అడగవలసిన అంశాలు",
+            ["AskDoctorHint"] = "ఇవి మీ స్వంత డాక్టర్‌తో ప్రస్తావించడానికి సూచనలు — ఏమి చేయాలో సూచనలు కావు.",
+            ["NoPromptsYet"] = "ప్రస్తుతం మీ కోసం ప్రత్యేక అంశాలు గుర్తించబడలేదు.",
+            ["MarkDone"] = "పూర్తయినట్లు గుర్తించండి",
+            ["HbncTitle"] = "HBNC ఇంటి సందర్శనలు",
+            ["HbncHint"] = "మీరు మరియు మీ శిశువు ఇద్దరినీ పరిశీలించే హోమ్ బేస్డ్ న్యూబార్న్ కేర్ సందర్శనలు. ఇంకా పుష్ రిమైండర్‌లు లేవు — మీరు యాప్ తెరిచినప్పుడు పరిస్థితి ఏమిటో ఈ జాబితా చూపిస్తుంది.",
+            ["HbncDayLabel"] = "రోజు {0} సందర్శన",
+            ["HbncCompleted"] = "పూర్తయింది",
+            ["HbncOverdue"] = "ఆలస్యమైంది",
+            ["HbncDueNow"] = "ఇప్పుడు గడువు",
+            ["HbncUpcoming"] = "రాబోయేది",
+            ["PhaseDays0to2"] = "రోజులు 0–2",
+            ["PhaseDays3to7"] = "రోజులు 3–7",
+            ["PhaseDays8to42"] = "రోజులు 8–42 (వారాలు 2–6)",
+            ["PhaseDay43Plus"] = "రోజు 43+ (6 వారాలు మరియు ఆపైన)",
+            ["CategoryWoundCare"] = "గాయం సంరక్షణ",
+            ["CategoryPain"] = "నొప్పి",
+            ["CategoryMobilityExercise"] = "కదలిక & వ్యాయామం",
+            ["CategoryBleeding"] = "రక్తస్రావం",
+            ["CategoryBladderBowel"] = "మూత్రాశయం & ప్రేగు",
+            ["CategoryNutritionSleep"] = "పోషణ & నిద్ర",
+            ["CategoryMentalHealth"] = "మానసిక ఆరోగ్యం",
+        },
+    };
+
+    private string T(string key) =>
+        (Strings.TryGetValue(_language, out var dict) && dict.TryGetValue(key, out var value))
+            ? value
+            : Strings["English"][key];
+}

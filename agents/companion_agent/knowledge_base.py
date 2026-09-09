@@ -102,3 +102,66 @@ def get_week_content(week: int) -> str:
 
 def get_general_content() -> str:
     return _GENERAL_CONTENT.strip()
+
+
+# Bereavement catalog -- a full, separate replacement for the pregnancy
+# knowledge base above, not an addition to it. Used only when the mother's
+# profile records a loss (see UserProfile.BirthOutcome / CareContext on the
+# C# side) -- the companion must not ground a grieving mother's questions in
+# week-by-week pregnancy milestones or "your baby's first smile" content.
+# No medication dosing (matches the app-wide rule); always defers anything
+# clinical to a real provider. First-pass, minimal content -- worth review
+# by a perinatal bereavement counsellor before this is relied on in
+# production, same caveat as the rest of the recovery-guide content.
+_BEREAVEMENT_CONTENT = """
+BEREAVEMENT CARE -- for a pregnancy or infant loss (stillbirth, neonatal death, or late
+miscarriage):
+
+Grief: there is no right way to grieve and no timeline for it. Waves of grief, numbness,
+anger, or guilt are all normal after a loss like this, for as long as they last.
+(Source: general perinatal bereavement care guidance, e.g. NHS "Grief after baby loss";
+Postpartum Support International.)
+
+Physical recovery still matters: her body went through a birth and still needs to
+recover -- wound care, watching for heavy bleeding, and rest are still important, exactly
+as they would be after any birth. Keep postpartum follow-up appointments even though
+there is no baby to bring to them.
+
+Milk coming in: even after a loss, the body may still produce milk -- an unexpected and
+painful reminder. Ask her provider about ways to ease this, both medication and
+non-medication approaches (such as cold compresses and supportive binding); some parents
+choose to pump and donate milk in their baby's memory, if and when that feels right.
+
+Anemia and heavy bleeding (postpartum hemorrhage) follow-up matters just as much after a
+loss -- don't skip the blood tests or follow-up visits a provider recommends.
+
+Support: many parents find it helps to talk to someone trained in this kind of grief, not
+only friends and family -- a perinatal loss counsellor, a support group, or a helpline.
+In India, Tele-MANAS (Government of India, toll-free 14416 or 1-800-891-4416) is available
+any time, in English and 20 regional languages.
+
+If there are thoughts of self-harm, reach out immediately to a provider, a trusted person
+nearby, or a helpline like Tele-MANAS above -- support is needed right now, not eventually.
+
+Partners, and any other children in the family, are grieving too, in their own way and
+their own time.
+""".strip()
+
+
+# Appended only for PartialLossMultiple (a multiple birth where one baby
+# survived) -- IsBereaved alone can't distinguish this from a full loss, and
+# the reply needs to hold both truths at once rather than either ignoring
+# the surviving baby or ignoring the grief.
+_PARTIAL_LOSS_ADDENDUM = """
+ADDITIONAL CONTEXT -- this was a multiple birth and one baby survived. Both things are
+true here: there is real grief for the baby who didn't survive, and a living baby who
+needs ordinary newborn care. Grief doesn't mean she doesn't also want practical answers
+about feeding, sleep, or her surviving baby's care -- answer those normally when asked,
+while still leaving room for how hard it is to hold both at once.
+""".strip()
+
+
+def get_bereavement_content(is_partial_loss_multiple: bool = False) -> str:
+    if is_partial_loss_multiple:
+        return f"{_BEREAVEMENT_CONTENT}\n\n{_PARTIAL_LOSS_ADDENDUM}"
+    return _BEREAVEMENT_CONTENT

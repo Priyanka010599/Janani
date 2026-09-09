@@ -19,3 +19,9 @@ obj/
 *.db-shm
 *.db-wal
 .vs/
+
+# Python venvs for agents/ and edge-device-sim/ -- irrelevant to the .NET
+# build and large enough (100+ MB) to noticeably slow every upload.
+**/.venv/
+**/venv/
+**/__pycache__/

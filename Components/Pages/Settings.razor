@@ -75,36 +75,45 @@
     <div class="sos-card">
         <h3>🩺 @T("DoctorAlertHeading")</h3>
         <p class="sos-hint">@T("DoctorAlertHint")</p>
-        @if (_emailAccount == null)
+    </div>
+
+    <div class="sos-card">
+        <h3>🔒 @T("PrivacyHeading")</h3>
+        <p class="sos-hint">@T("PrivacyHint")</p>
+        <button type="button" class="bloom-btn secondary small-btn" onclick="document.getElementById('privacy-dialog').showModal()">@T("PrivacyLinkBtn")</button>
+    </div>
+
+    <dialog id="privacy-dialog" class="privacy-dialog">
+        <h1>🔒 Privacy Policy</h1>
+        <PrivacyPolicyContent />
+        <button type="button" class="bloom-btn secondary small-btn" onclick="document.getElementById('privacy-dialog').close()">@T("CloseBtn")</button>
+    </dialog>
+
+    <div class="sos-card">
+        <h3>📟 @T("DevicePairingHeading")</h3>
+        <p class="sos-hint">@T("DevicePairingHint")</p>
+        @if (!string.IsNullOrEmpty(_devicePairingToken))
         {
-            <a class="bloom-btn primary small-btn" href="/email-alerts/connect/google">@T("ConnectGmailButton")</a>
+            <p class="sos-hint" style="word-break:break-all;">@_devicePairingToken</p>
         }
         else
         {
-            <p class="sos-hint">@T("ConnectedOn") @_emailAccount.ConnectedAt.ToLocalTime().ToString("dd MMM yyyy")</p>
-
-            @if (_emailAccount.LastSendFailed)
-            {
-                <div class="sos-safety-note">
-                    <p>⚠️ @T("EmailSendFailedWarning")</p>
-                </div>
-            }
-
-            <div class="form-actions">
-                <a class="bloom-btn secondary small-btn" href="/email-alerts/disconnect/google">@T("Disconnect")</a>
-            </div>
+            <p class="sos-hint">@T("DevicePairingNotSet")</p>
         }
+        <button class="bloom-btn secondary small-btn" @onclick="GenerateDevicePairingTokenAsync">
+            @(string.IsNullOrEmpty(_devicePairingToken) ? T("DevicePairingGenerateBtn") : T("DevicePairingRegenerateBtn"))
+        </button>
     </div>
 </div>
 
 @code {
     private ConnectedCalendarAccount? _account;
-    private ConnectedEmailAccount? _emailAccount;
     private string? _banner;
     private bool _pushEnabled;
     private bool _enablingPush;
     private string? _pushError;
     private string _language = "English";
+    private string? _devicePairingToken;
 
     private record PushEnableResult(bool Ok, string? Reason);
 
@@ -113,26 +122,20 @@
         var userId = await CurrentUser.GetUserIdAsync();
         var profile = await Db.UserProfiles.AsNoTracking().FirstOrDefaultAsync(p => p.UserId == userId);
         _language = (profile?.Language ?? AppLanguage.English).ToString();
+        _devicePairingToken = profile?.DevicePairingToken;
 
         var uri = new Uri(Nav.Uri);
         var query = !string.IsNullOrEmpty(uri.Query)
             ? Microsoft.AspNetCore.WebUtilities.QueryHelpers.ParseQuery(uri.Query)
             : null;
         var calendarParam = query != null && query.TryGetValue("calendar", out var v) ? v.ToString() : null;
-        var emailAlertsParam = query != null && query.TryGetValue("emailAlerts", out var e) ? e.ToString() : null;
 
         _banner = calendarParam switch
         {
             "connected" => T("BannerCalendarConnected"),
             "disconnected" => T("BannerCalendarDisconnected"),
             "error" => T("BannerCalendarError"),
-            _ => emailAlertsParam switch
-            {
-                "connected" => T("BannerGmailConnected"),
-                "disconnected" => T("BannerGmailDisconnected"),
-                "error" => T("BannerGmailError"),
-                _ => null
-            }
+            _ => null
         };
 
         await LoadAsync();
@@ -143,11 +146,18 @@
         var userId = await CurrentUser.GetUserIdAsync();
         _account = await Db.ConnectedCalendarAccounts
             .FirstOrDefaultAsync(a => a.UserId == userId && a.Provider == "Google");
-        _emailAccount = await Db.ConnectedEmailAccounts
-            .FirstOrDefaultAsync(a => a.UserId == userId && a.Provider == "Google");
     }
 
     private async Task SaveSyncEnabledAsync() => await Db.SaveChangesAsync();
+
+    private async Task GenerateDevicePairingTokenAsync()
+    {
+        var userId = await CurrentUser.GetUserIdAsync();
+        var token = Guid.NewGuid().ToString("N");
+        await Db.UserProfiles.Where(p => p.UserId == userId)
+            .ExecuteUpdateAsync(s => s.SetProperty(p => p.DevicePairingToken, token));
+        _devicePairingToken = token;
+    }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
@@ -200,18 +210,22 @@
             ["Enabling"] = "Enabling...",
             ["EnableNotifications"] = "Enable notifications",
             ["DoctorAlertHeading"] = "Doctor Alert Emails",
-            ["DoctorAlertHint"] = "Connect Gmail so Janani can automatically email a designated doctor the moment a Critical concern is flagged for someone you care for — set the doctor's email on each elder/infant profile.",
-            ["ConnectGmailButton"] = "Connect Gmail",
-            ["EmailSendFailedWarning"] = "The last doctor alert email failed to send. Try reconnecting if this keeps happening.",
+            ["DoctorAlertHint"] = "Automatic — no setup needed. The moment a Critical concern is flagged for someone you care for, Janani emails the doctor you've set on their profile.",
             ["BannerCalendarConnected"] = "Google Calendar connected — new appointments will sync automatically. 🌸",
             ["BannerCalendarDisconnected"] = "Google Calendar disconnected.",
             ["BannerCalendarError"] = "Something went wrong connecting Google Calendar — please try again.",
-            ["BannerGmailConnected"] = "Gmail connected — doctor alert emails are on. 🌸",
-            ["BannerGmailDisconnected"] = "Gmail disconnected — doctor alert emails are off.",
-            ["BannerGmailError"] = "Something went wrong connecting Gmail — please try again.",
             ["PushDenied"] = "Notifications were blocked — you can allow them from your browser's site settings.",
             ["PushUnsupported"] = "This browser doesn't support push notifications.",
             ["PushError"] = "Something went wrong enabling notifications — please try again.",
+            ["PrivacyHeading"] = "Privacy",
+            ["PrivacyHint"] = "See exactly what Janani stores about you and why.",
+            ["PrivacyLinkBtn"] = "View privacy policy",
+            ["CloseBtn"] = "Close",
+            ["DevicePairingHeading"] = "Pregnancy Vitals Device Pairing",
+            ["DevicePairingHint"] = "Generate a pairing code to let a vitals device (or the edge-device-sim demo) upload readings to your account directly.",
+            ["DevicePairingNotSet"] = "No pairing code generated yet.",
+            ["DevicePairingGenerateBtn"] = "Generate pairing code",
+            ["DevicePairingRegenerateBtn"] = "Regenerate pairing code",
         },
         ["Hindi"] = new()
         {
@@ -230,18 +244,22 @@
             ["Enabling"] = "सक्षम किया जा रहा है...",
             ["EnableNotifications"] = "सूचनाएं सक्षम करें",
             ["DoctorAlertHeading"] = "डॉक्टर अलर्ट ईमेल",
-            ["DoctorAlertHint"] = "Gmail कनेक्ट करें ताकि जनानी आपके किसी अपने के लिए गंभीर (Critical) चिंता फ़्लैग होते ही तुरंत नियत डॉक्टर को ईमेल कर सके — डॉक्टर की ईमेल प्रत्येक बुज़ुर्ग/शिशु प्रोफ़ाइल में सेट करें।",
-            ["ConnectGmailButton"] = "Gmail कनेक्ट करें",
-            ["EmailSendFailedWarning"] = "आखिरी डॉक्टर अलर्ट ईमेल भेजने में विफल रहा। यदि यह बार-बार हो रहा है, तो दोबारा कनेक्ट करने का प्रयास करें।",
+            ["DoctorAlertHint"] = "स्वचालित — कोई सेटअप ज़रूरी नहीं। आपके किसी अपने के लिए गंभीर (Critical) चिंता फ़्लैग होते ही, जनानी उनकी प्रोफ़ाइल पर सेट डॉक्टर को ईमेल भेज देती है।",
             ["BannerCalendarConnected"] = "Google Calendar कनेक्ट हो गया — नए अपॉइंटमेंट अपने आप सिंक होंगे। 🌸",
             ["BannerCalendarDisconnected"] = "Google Calendar डिस्कनेक्ट हो गया।",
             ["BannerCalendarError"] = "Google Calendar कनेक्ट करने में कुछ गड़बड़ हो गई — कृपया फिर से प्रयास करें।",
-            ["BannerGmailConnected"] = "Gmail कनेक्ट हो गया — डॉक्टर अलर्ट ईमेल चालू हैं। 🌸",
-            ["BannerGmailDisconnected"] = "Gmail डिस्कनेक्ट हो गया — डॉक्टर अलर्ट ईमेल बंद हैं।",
-            ["BannerGmailError"] = "Gmail कनेक्ट करने में कुछ गड़बड़ हो गई — कृपया फिर से प्रयास करें।",
             ["PushDenied"] = "सूचनाएं ब्लॉक कर दी गई थीं — आप उन्हें अपने ब्राउज़र की साइट सेटिंग्स से अनुमति दे सकते हैं।",
             ["PushUnsupported"] = "यह ब्राउज़र पुश सूचनाओं का समर्थन नहीं करता।",
             ["PushError"] = "सूचनाएं सक्षम करने में कुछ गड़बड़ हो गई — कृपया फिर से प्रयास करें।",
+            ["PrivacyHeading"] = "गोपनीयता",
+            ["PrivacyHint"] = "देखें कि जनानी आपके बारे में वास्तव में क्या और क्यों सहेजती है।",
+            ["PrivacyLinkBtn"] = "गोपनीयता नीति देखें",
+            ["CloseBtn"] = "बंद करें",
+            ["DevicePairingHeading"] = "प्रेगनेंसी वाइटल्स डिवाइस पेयरिंग",
+            ["DevicePairingHint"] = "एक पेयरिंग कोड बनाएं ताकि कोई वाइटल्स डिवाइस (या edge-device-sim डेमो) सीधे आपके खाते में रीडिंग अपलोड कर सके।",
+            ["DevicePairingNotSet"] = "अभी तक कोई पेयरिंग कोड नहीं बनाया गया।",
+            ["DevicePairingGenerateBtn"] = "पेयरिंग कोड बनाएं",
+            ["DevicePairingRegenerateBtn"] = "पेयरिंग कोड फिर से बनाएं",
         },
         ["Telugu"] = new()
         {
@@ -260,18 +278,22 @@
             ["Enabling"] = "ప్రారంభిస్తోంది...",
             ["EnableNotifications"] = "నోటిఫికేషన్‌లను ప్రారంభించండి",
             ["DoctorAlertHeading"] = "డాక్టర్ అలర్ట్ ఇమెయిల్‌లు",
-            ["DoctorAlertHint"] = "మీరు చూసుకుంటున్న వ్యక్తికి క్రిటికల్ ఆందోళన ఫ్లాగ్ అయిన వెంటనే జననీ నిర్దేశిత డాక్టర్‌కు స్వయంచాలకంగా ఇమెయిల్ పంపగలిగేలా Gmailను కనెక్ట్ చేయండి — ప్రతి వృద్ధుల/శిశు ప్రొఫైల్‌లో డాక్టర్ ఇమెయిల్‌ను సెట్ చేయండి.",
-            ["ConnectGmailButton"] = "Gmailను కనెక్ట్ చేయండి",
-            ["EmailSendFailedWarning"] = "చివరి డాక్టర్ అలర్ట్ ఇమెయిల్ పంపడంలో విఫలమైంది. ఇది పదేపదే జరుగుతుంటే, మళ్లీ కనెక్ట్ చేయడానికి ప్రయత్నించండి.",
+            ["DoctorAlertHint"] = "స్వయంచాలకం — సెటప్ అవసరం లేదు. మీరు చూసుకుంటున్న వ్యక్తికి క్రిటికల్ ఆందోళన ఫ్లాగ్ అయిన వెంటనే, జననీ వారి ప్రొఫైల్‌లో సెట్ చేసిన డాక్టర్‌కు ఇమెయిల్ పంపుతుంది.",
             ["BannerCalendarConnected"] = "Google Calendar కనెక్ట్ అయింది — కొత్త అపాయింట్‌మెంట్‌లు స్వయంచాలకంగా సింక్ అవుతాయి. 🌸",
             ["BannerCalendarDisconnected"] = "Google Calendar డిస్‌కనెక్ట్ అయింది.",
             ["BannerCalendarError"] = "Google Calendarను కనెక్ట్ చేయడంలో ఏదో తప్పు జరిగింది — దయచేసి మళ్లీ ప్రయత్నించండి.",
-            ["BannerGmailConnected"] = "Gmail కనెక్ట్ అయింది — డాక్టర్ అలర్ట్ ఇమెయిల్‌లు ఆన్‌లో ఉన్నాయి. 🌸",
-            ["BannerGmailDisconnected"] = "Gmail డిస్‌కనెక్ట్ అయింది — డాక్టర్ అలర్ట్ ఇమెయిల్‌లు ఆఫ్‌లో ఉన్నాయి.",
-            ["BannerGmailError"] = "Gmailను కనెక్ట్ చేయడంలో ఏదో తప్పు జరిగింది — దయచేసి మళ్లీ ప్రయత్నించండి.",
             ["PushDenied"] = "నోటిఫికేషన్‌లు బ్లాక్ చేయబడ్డాయి — మీరు వాటిని మీ బ్రౌజర్ సైట్ సెట్టింగ్‌ల నుండి అనుమతించవచ్చు.",
             ["PushUnsupported"] = "ఈ బ్రౌజర్ పుష్ నోటిఫికేషన్‌లకు మద్దతు ఇవ్వదు.",
             ["PushError"] = "నోటిఫికేషన్‌లను ప్రారంభించడంలో ఏదో తప్పు జరిగింది — దయచేసి మళ్లీ ప్రయత్నించండి.",
+            ["PrivacyHeading"] = "గోప్యత",
+            ["PrivacyHint"] = "జననీ మీ గురించి ఖచ్చితంగా ఏమి, ఎందుకు నిల్వ చేస్తుందో చూడండి.",
+            ["PrivacyLinkBtn"] = "గోప్యతా విధానాన్ని చూడండి",
+            ["CloseBtn"] = "మూసివేయండి",
+            ["DevicePairingHeading"] = "ప్రెగ్నెన్సీ వైటల్స్ డివైస్ పెయిరింగ్",
+            ["DevicePairingHint"] = "మీ ఖాతాకు నేరుగా రీడింగ్‌లు అప్‌లోడ్ చేయడానికి ఒక వైటల్స్ డివైస్ (లేదా edge-device-sim డెమో) కోసం పెయిరింగ్ కోడ్‌ను రూపొందించండి.",
+            ["DevicePairingNotSet"] = "ఇంకా పెయిరింగ్ కోడ్ రూపొందించబడలేదు.",
+            ["DevicePairingGenerateBtn"] = "పెయిరింగ్ కోడ్‌ను రూపొందించండి",
+            ["DevicePairingRegenerateBtn"] = "పెయిరింగ్ కోడ్‌ను మళ్లీ రూపొందించండి",
         },
     };
 

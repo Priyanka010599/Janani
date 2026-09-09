@@ -582,8 +582,10 @@
                 await PushNotifications.NotifyUserViaPubSubAsync(caregiverId, $"{prefix} {_selectedInfant.Name} — growth concern", alert.Message, "infant-checker", NotificationScope.Infant, infantProfileId: _selectedInfant.Id);
             }
 
-            // Only Critical escalates to the doctor by email, sent once via
-            // whichever caregiver has Gmail connected.
+            // Only Critical escalates to the doctor by email. Sent once, by
+            // the app itself through one centrally-configured sender — no
+            // caregiver connects an account, and none of them ever sees a
+            // credential (see IEmailNotificationService).
             if (alert.Severity == AlertSeverity.Critical && !string.IsNullOrWhiteSpace(_selectedInfant.DoctorEmail))
             {
                 var subject = $"Urgent: {_selectedInfant.Name} may need attention (via Janani)";
@@ -664,7 +666,7 @@
             ["SendSosBtn"] = "Send SOS about this",
             ["SeenThisBtn"] = "I've seen this",
             ["DoctorSectionTitle"] = "Doctor for critical alerts",
-            ["DoctorSectionHint"] = "If something Critical is flagged, Janani can automatically email this doctor (needs Gmail connected in Settings).",
+            ["DoctorSectionHint"] = "If something Critical is flagged, Janani emails this doctor automatically — no setup needed.",
             ["DoctorNamePlaceholder"] = "Doctor's name",
             ["DoctorEmailPlaceholder"] = "Doctor's email",
             ["Save"] = "Save",
@@ -737,7 +739,7 @@
             ["SendSosBtn"] = "इसके बारे में SOS भेजें",
             ["SeenThisBtn"] = "मैंने इसे देख लिया है",
             ["DoctorSectionTitle"] = "गंभीर अलर्ट के लिए डॉक्टर",
-            ["DoctorSectionHint"] = "यदि कुछ गंभीर के रूप में चिह्नित होता है, तो जनानी अपने आप इस डॉक्टर को ईमेल कर सकती है (सेटिंग्स में Gmail कनेक्ट होना ज़रूरी है)।",
+            ["DoctorSectionHint"] = "यदि कुछ गंभीर के रूप में चिह्नित होता है, तो जनानी अपने आप इस डॉक्टर को ईमेल करती है — कोई सेटअप ज़रूरी नहीं।",
             ["DoctorNamePlaceholder"] = "डॉक्टर का नाम",
             ["DoctorEmailPlaceholder"] = "डॉक्टर का ईमेल",
             ["Save"] = "सहेजें",
@@ -810,7 +812,7 @@
             ["SendSosBtn"] = "దీని గురించి SOS పంపండి",
             ["SeenThisBtn"] = "నేను దీన్ని చూశాను",
             ["DoctorSectionTitle"] = "తీవ్రమైన హెచ్చరికల కోసం డాక్టర్",
-            ["DoctorSectionHint"] = "ఏదైనా తీవ్రమైనదిగా గుర్తించబడితే, జననీ స్వయంచాలకంగా ఈ డాక్టర్‌కి ఇమెయిల్ పంపగలదు (సెట్టింగ్‌లలో Gmail కనెక్ట్ చేసి ఉండాలి).",
+            ["DoctorSectionHint"] = "ఏదైనా తీవ్రమైనదిగా గుర్తించబడితే, జననీ స్వయంచాలకంగా ఈ డాక్టర్‌కి ఇమెయిల్ పంపుతుంది — ఎటువంటి సెటప్ అవసరం లేదు.",
             ["DoctorNamePlaceholder"] = "డాక్టర్ పేరు",
             ["DoctorEmailPlaceholder"] = "డాక్టర్ ఇమెయిల్",
             ["Save"] = "సేవ్ చేయండి",

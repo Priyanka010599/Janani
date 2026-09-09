@@ -10,6 +10,7 @@
 @inject AppDbContext Db
 @inject UserProfileCache ProfileCache
 @inject CurrentUserService CurrentUser
+@inject GoogleCloudStorageService Storage
 @rendermode InteractiveServer
 
 <PageTitle>Janani — My Pregnancy Journal</PageTitle>
@@ -100,7 +101,7 @@
                         @foreach (var photo in photos)
                         {
                             <button type="button" class="polaroid" @onclick="() => _lightboxPhoto = photo">
-                                <img src="@GetDataUri(photo)" alt="@T("AltJournalPhoto")" />
+                                <img src="@_photoDisplayUrl.GetValueOrDefault(photo.Id, "")" alt="@T("AltJournalPhoto")" />
                             </button>
                         }
                     </div>
@@ -124,9 +125,9 @@
 {
     <div class="photo-lightbox-backdrop" @onclick="() => _lightboxPhoto = null">
         <div class="photo-lightbox" @onclick:stopPropagation="true">
-            <img src="@GetDataUri(lightboxPhoto)" alt="@T("AltJournalPhoto")" />
+            <img src="@_photoDisplayUrl.GetValueOrDefault(lightboxPhoto.Id, "")" alt="@T("AltJournalPhoto")" />
             <div class="photo-lightbox-actions">
-                <a class="bloom-btn primary small-btn" href="@GetDataUri(lightboxPhoto)" download="journal-photo.jpg">@T("DownloadButton")</a>
+                <a class="bloom-btn primary small-btn" href="@_photoDisplayUrl.GetValueOrDefault(lightboxPhoto.Id, "")" download="journal-photo.jpg">@T("DownloadButton")</a>
                 <button type="button" class="bloom-btn secondary small-btn" @onclick="() => _lightboxPhoto = null">@T("CloseButton")</button>
             </div>
         </div>
@@ -141,6 +142,7 @@
 
     private List<JournalEntry> _entries = [];
     private Dictionary<int, List<JournalPhoto>> _photosByEntry = [];
+    private Dictionary<int, string> _photoDisplayUrl = [];
     private bool _writing;
     private string _newTitle = string.Empty;
     private string _newContent = string.Empty;
@@ -173,9 +175,30 @@
             .Where(p => entryIds.Contains(p.JournalEntryId))
             .ToListAsync();
         _photosByEntry = photos.GroupBy(p => p.JournalEntryId).ToDictionary(g => g.Key, g => g.ToList());
+
+        _photoDisplayUrl = [];
+        foreach (var photo in photos)
+        {
+            _photoDisplayUrl[photo.Id] = await ResolveDisplayUrlAsync(photo);
+        }
     }
 
-    private string GetDataUri(JournalPhoto photo) => $"data:{photo.ContentType};base64,{photo.ImageData}";
+    // New photos are uploaded to GCS and referenced by object name, prefixed
+    // "gcs://" so this same TEXT column can still hold a legacy raw-base64
+    // value from before GCS was wired up -- no schema change, no migration.
+    // The bucket is private, so display always goes through a fresh
+    // short-lived signed URL rather than a permanent public link.
+    private const string GcsPrefix = "gcs://";
+
+    private async Task<string> ResolveDisplayUrlAsync(JournalPhoto photo)
+    {
+        if (photo.ImageData.StartsWith(GcsPrefix))
+        {
+            var objectName = photo.ImageData[GcsPrefix.Length..];
+            return await Storage.GetSignedUrlAsync(objectName) ?? "";
+        }
+        return $"data:{photo.ContentType};base64,{photo.ImageData}";
+    }
 
     private async Task OnPhotosSelectedAsync(InputFileChangeEventArgs e)
     {
@@ -203,6 +226,12 @@
             {
                 _photoError = string.Format(T("UnknownFormatError"), file.Name);
             }
+            catch (ImageTooLargeException)
+            {
+                // Same user-facing message as an oversized file — from her
+                // side it's the same problem, just measured in pixels.
+                _photoError = string.Format(T("FileTooLargeError"), file.Name);
+            }
         }
     }
 
@@ -212,9 +241,30 @@
     // every photo added to a journal entry.
     private const int MaxPhotoDimension = 1600;
 
+    // An 8MB file cap bounds what gets uploaded, but not what it costs to
+    // decode: image formats compress runs of identical pixels extremely well,
+    // so a ~100KB PNG can legitimately declare 30000x30000 and expand to
+    // ~3.6GB of raw pixels the moment it's decoded — enough to OOM the 1Gi
+    // Cloud Run container from one request. Identify() reads only the header,
+    // so dimensions can be checked before committing to that allocation.
+    // 50M pixels sits far above any real phone camera (a 48MP shot is ~48M).
+    private const long MaxPixelCount = 50_000_000;
+
     private static async Task<(string Base64, string ContentType)> ResizeForStorageAsync(Stream inputStream)
     {
-        using var image = await Image.LoadAsync(inputStream);
+        // Buffered because the header has to be inspected before the pixels
+        // are decoded, and Blazor's OpenReadStream is forward-only — it can't
+        // be rewound after Identify(). Bounded by MaxFileSize at the caller.
+        using var buffered = new MemoryStream();
+        await inputStream.CopyToAsync(buffered);
+        buffered.Position = 0;
+
+        var info = await Image.IdentifyAsync(buffered);
+        if ((long)info.Width * info.Height > MaxPixelCount)
+            throw new ImageTooLargeException(info.Width, info.Height);
+        buffered.Position = 0;
+
+        using var image = await Image.LoadAsync(buffered);
 
         if (image.Width > MaxPhotoDimension || image.Height > MaxPhotoDimension)
         {
@@ -229,6 +279,11 @@
         await image.SaveAsJpegAsync(output, new JpegEncoder { Quality = 80 });
         return (Convert.ToBase64String(output.ToArray()), "image/jpeg");
     }
+
+    // Distinct from UnknownImageFormatException so the caller can tell a
+    // decode-bomb rejection apart from a genuinely unreadable file.
+    private sealed class ImageTooLargeException(int width, int height)
+        : Exception($"Image dimensions {width}x{height} exceed the supported size.");
 
     private void RemovePendingPhoto(PendingPhoto photo) => _newPhotos.Remove(photo);
 
@@ -250,10 +305,15 @@
         {
             foreach (var photo in _newPhotos)
             {
+                var bytes = Convert.FromBase64String(photo.Base64);
+                var upload = await Storage.UploadImageAsync(bytes, photo.ContentType, "journal-photo");
                 Db.JournalPhotos.Add(new JournalPhoto
                 {
                     JournalEntryId = entry.Id,
-                    ImageData = photo.Base64,
+                    // Falls back to the original raw-base64 storage when GCS
+                    // is unavailable (upload.IsCloudStorage == false) -- same
+                    // behavior as before this change, not a new fallback path.
+                    ImageData = upload.IsCloudStorage ? $"{GcsPrefix}{upload.ObjectName}" : photo.Base64,
                     ContentType = photo.ContentType
                 });
             }

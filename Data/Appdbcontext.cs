@@ -23,6 +23,8 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
     public DbSet<AppointmentEntry> Appointments => Set<AppointmentEntry>();
     public DbSet<WaterIntakeEntry> WaterIntake => Set<WaterIntakeEntry>();
     public DbSet<KickSession> KickSessions => Set<KickSession>();
+    public DbSet<PregnancyVitalsReading> PregnancyVitalsReadings => Set<PregnancyVitalsReading>();
+    public DbSet<PregnancyAlert> PregnancyAlerts => Set<PregnancyAlert>();
     public DbSet<EmergencyContact> EmergencyContacts => Set<EmergencyContact>();
     public DbSet<Medicine> Medicines => Set<Medicine>();
     public DbSet<MedicineDose> MedicineDoses => Set<MedicineDose>();
@@ -39,8 +41,11 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
     public DbSet<VaccinationRecord> VaccinationRecords => Set<VaccinationRecord>();
     public DbSet<InfantAlert> InfantAlerts => Set<InfantAlert>();
     public DbSet<PushSubscription> PushSubscriptions => Set<PushSubscription>();
-    public DbSet<ConnectedEmailAccount> ConnectedEmailAccounts => Set<ConnectedEmailAccount>();
     public DbSet<SharedCareAccess> SharedCareAccess => Set<SharedCareAccess>();
+    public DbSet<RecoveryPlanItemCompletion> RecoveryPlanItemCompletions => Set<RecoveryPlanItemCompletion>();
+    public DbSet<PostpartumCheckIn> PostpartumCheckIns => Set<PostpartumCheckIn>();
+    public DbSet<PostpartumAlert> PostpartumAlerts => Set<PostpartumAlert>();
+    public DbSet<EpdsScreening> EpdsScreenings => Set<EpdsScreening>();
     public DbSet<Microsoft.AspNetCore.DataProtection.EntityFrameworkCore.DataProtectionKey> DataProtectionKeys => Set<Microsoft.AspNetCore.DataProtection.EntityFrameworkCore.DataProtectionKey>();
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -63,6 +68,11 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
         modelBuilder.Entity<WaterIntakeEntry>().HasIndex(w => w.UserId);
         modelBuilder.Entity<KickSession>().HasIndex(k => k.Date);
         modelBuilder.Entity<KickSession>().HasIndex(k => k.UserId);
+        modelBuilder.Entity<PregnancyVitalsReading>().HasIndex(v => v.UserId);
+        modelBuilder.Entity<PregnancyVitalsReading>().HasIndex(v => v.RecordedAt);
+        modelBuilder.Entity<PregnancyVitalsReading>().HasIndex(v => v.DeviceReadingId).IsUnique().HasFilter("\"DeviceReadingId\" IS NOT NULL");
+        modelBuilder.Entity<PregnancyAlert>().HasIndex(a => a.UserId);
+        modelBuilder.Entity<PregnancyAlert>().HasIndex(a => a.TriggeredAt);
         modelBuilder.Entity<AppointmentEntry>().HasIndex(a => a.AppointmentDate);
         modelBuilder.Entity<AppointmentEntry>().HasIndex(a => a.UserId);
         modelBuilder.Entity<JournalEntry>().HasIndex(j => j.CreatedAt);
@@ -78,6 +88,10 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
         modelBuilder.Entity<ElderProfile>().HasIndex(e => e.UserId);
         modelBuilder.Entity<VitalsReading>().HasIndex(v => v.ElderProfileId);
         modelBuilder.Entity<VitalsReading>().HasIndex(v => v.RecordedAt);
+        // Mirrors the partial unique index created via raw SQL in Program.cs —
+        // this app has no EF migrations, so that raw SQL is the real DDL
+        // source of truth; this is only for LINQ query translation.
+        modelBuilder.Entity<VitalsReading>().HasIndex(v => v.DeviceReadingId).IsUnique().HasFilter("\"DeviceReadingId\" IS NOT NULL");
         modelBuilder.Entity<ElderCheckIn>().HasIndex(c => c.ElderProfileId);
         modelBuilder.Entity<ElderCheckIn>().HasIndex(c => c.CheckedAt);
         modelBuilder.Entity<Alert>().HasIndex(a => a.ElderProfileId);
@@ -93,10 +107,15 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
         modelBuilder.Entity<InfantAlert>().HasIndex(a => a.TriggeredAt);
         modelBuilder.Entity<PushSubscription>().HasIndex(p => p.UserId);
         modelBuilder.Entity<PushSubscription>().HasIndex(p => p.Token).IsUnique();
-        modelBuilder.Entity<ConnectedEmailAccount>().HasIndex(c => c.UserId);
-        modelBuilder.Entity<ConnectedEmailAccount>().HasIndex(c => new { c.UserId, c.Provider }).IsUnique();
         modelBuilder.Entity<SharedCareAccess>().HasIndex(s => s.UserId);
         modelBuilder.Entity<SharedCareAccess>().HasIndex(s => s.ElderProfileId);
         modelBuilder.Entity<SharedCareAccess>().HasIndex(s => s.InfantProfileId);
+        modelBuilder.Entity<RecoveryPlanItemCompletion>().HasIndex(c => new { c.UserId, c.ItemKey }).IsUnique();
+        modelBuilder.Entity<PostpartumCheckIn>().HasIndex(c => c.UserId);
+        modelBuilder.Entity<PostpartumCheckIn>().HasIndex(c => c.CheckedAt);
+        modelBuilder.Entity<PostpartumAlert>().HasIndex(a => a.UserId);
+        modelBuilder.Entity<PostpartumAlert>().HasIndex(a => a.TriggeredAt);
+        modelBuilder.Entity<EpdsScreening>().HasIndex(e => e.UserId);
+        modelBuilder.Entity<EpdsScreening>().HasIndex(e => e.AdministeredAt);
     }
 }

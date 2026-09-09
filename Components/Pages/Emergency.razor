@@ -7,6 +7,7 @@
 @inject UserProfileCache ProfileCache
 @inject CurrentUserService CurrentUser
 @inject CareAccessService CareAccess
+@inject IEmailNotificationService EmailNotifications
 @rendermode InteractiveServer
 
 <PageTitle>Janani — Distress & Support</PageTitle>
@@ -43,6 +44,13 @@
         <textarea class="sos-message" @bind="_sosMessage" @bind:event="oninput" rows="3"></textarea>
     </div>
 
+    @if (_sendError is not null)
+    {
+        <div class="sos-safety-note">
+            <p>⚠️ @_sendError</p>
+        </div>
+    }
+
     @if (_contacts.Any())
     {
         <div class="contact-list">
@@ -63,7 +71,25 @@
                         }
                         @if (!string.IsNullOrWhiteSpace(c.Email))
                         {
-                            <a class="bloom-btn secondary small-btn" href="@BuildMailtoLink(c)">✉️ @T("EmailBtn")</a>
+                            @* Sends server-side rather than opening a mailto: —
+                               a mail-client picker dialog is the wrong thing to
+                               meet someone with when they've just tapped SOS. *@
+                            <button class="bloom-btn secondary small-btn"
+                                    @onclick="() => SendEmailAsync(c)"
+                                    disabled="@(_sendingTo == c.Id || _sentTo.Contains(c.Id))">
+                                @if (_sendingTo == c.Id)
+                                {
+                                    @($"⏳ {T("EmailSending")}")
+                                }
+                                else if (_sentTo.Contains(c.Id))
+                                {
+                                    @($"✅ {T("EmailSent")}")
+                                }
+                                else
+                                {
+                                    @($"✉️ {T("EmailBtn")}")
+                                }
+                            </button>
                         }
                         <button class="icon-btn" title="@string.Format(T("RemoveTemplate"), c.Name)" aria-label="@string.Format(T("RemoveTemplate"), c.Name)" @onclick="() => DeleteContactAsync(c)">✕</button>
                     </div>
@@ -316,12 +342,35 @@
         return $"sms:{Uri.EscapeDataString(phone)}?body={Uri.EscapeDataString(_sosMessage)}";
     }
 
-    private string BuildMailtoLink(EmergencyContact contact)
+    // Which contact's send is in flight, and which have already gone out this
+    // visit. Tracked per contact id rather than as one page-level flag so
+    // emailing two people in a row doesn't make the first button lie.
+    private int? _sendingTo;
+    private readonly HashSet<int> _sentTo = [];
+    private string? _sendError;
+
+    private async Task SendEmailAsync(EmergencyContact contact)
     {
-        if (string.IsNullOrWhiteSpace(contact.Email)) return "#";
-        var subject = Uri.EscapeDataString(T("EmailSubject"));
-        var body = Uri.EscapeDataString(_sosMessage);
-        return $"mailto:{contact.Email}?subject={subject}&body={body}";
+        if (string.IsNullOrWhiteSpace(contact.Email) || _sendingTo is not null) return;
+
+        _sendingTo = contact.Id;
+        _sendError = null;
+
+        var sent = await EmailNotifications.SendDoctorAlertAsync(
+            contact.Email, contact.Name, T("EmailSubject"), _sosMessage);
+
+        _sendingTo = null;
+        if (sent)
+        {
+            _sentTo.Add(contact.Id);
+        }
+        else
+        {
+            // Never silently swallow this. She believes she has reached
+            // someone; if she hasn't, she needs to know immediately so she can
+            // call instead — the Call button is right there.
+            _sendError = string.Format(T("EmailFailed"), contact.Name);
+        }
     }
 
     private static readonly Dictionary<string, Dictionary<string, string>> Strings = new()
@@ -337,6 +386,9 @@
             ["CallBtn"] = "Call",
             ["TextBtn"] = "Text",
             ["EmailBtn"] = "Email",
+            ["EmailSending"] = "Sending…",
+            ["EmailSent"] = "Sent",
+            ["EmailFailed"] = "Couldn't email {0} — please call them instead.",
             ["RemoveTemplate"] = "Remove {0}",
             ["EmptyTitle"] = "No contacts saved yet 🌷",
             ["EmptyHint"] = "Add your doctor or someone you trust below so you can reach them quickly.",
@@ -375,6 +427,9 @@
             ["CallBtn"] = "कॉल करें",
             ["TextBtn"] = "टेक्स्ट करें",
             ["EmailBtn"] = "ईमेल करें",
+            ["EmailSending"] = "भेज रहे हैं…",
+            ["EmailSent"] = "भेज दिया",
+            ["EmailFailed"] = "{0} को ईमेल नहीं भेज सके — कृपया उन्हें कॉल करें।",
             ["RemoveTemplate"] = "{0} हटाएं",
             ["EmptyTitle"] = "अभी तक कोई संपर्क सहेजा नहीं गया 🌷",
             ["EmptyHint"] = "अपने डॉक्टर या किसी भरोसेमंद व्यक्ति को नीचे जोड़ें ताकि आप उन्हें जल्दी से संपर्क कर सकें।",
@@ -413,6 +468,9 @@
             ["CallBtn"] = "కాల్ చేయండి",
             ["TextBtn"] = "టెక్స్ట్ చేయండి",
             ["EmailBtn"] = "ఇమెయిల్ చేయండి",
+            ["EmailSending"] = "పంపుతోంది…",
+            ["EmailSent"] = "పంపబడింది",
+            ["EmailFailed"] = "{0}కి ఇమెయిల్ పంపలేకపోయాం — దయచేసి వారికి కాల్ చేయండి.",
             ["RemoveTemplate"] = "{0}ని తొలగించండి",
             ["EmptyTitle"] = "ఇంకా సంప్రదింపులు సేవ్ చేయలేదు 🌷",
             ["EmptyHint"] = "మీరు త్వరగా చేరుకోగలిగేలా మీ డాక్టర్ లేదా మీరు నమ్మే వ్యక్తిని క్రింద జోడించండి.",

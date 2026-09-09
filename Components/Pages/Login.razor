@@ -55,14 +55,25 @@
 
     private string? _error;
 
+    // A real hash of a value nobody can log in with, computed once. Verifying
+    // against this when the username doesn't exist keeps the work — and so the
+    // response time — the same either way; otherwise the missing-user path
+    // returns without hashing at all, and that timing difference reveals which
+    // usernames are real, defeating the generic message below.
+    private static readonly string DummyPasswordHash =
+        new PasswordHasher<User>().HashPassword(new User(), Guid.NewGuid().ToString());
+
     private async Task HandleLoginAsync()
     {
         var username = Input.Username.Trim().ToLowerInvariant();
         var user = await Db.Users.AsNoTracking().FirstOrDefaultAsync(u => u.Username == username);
 
         var hasher = new PasswordHasher<User>();
-        if (user == null ||
-            hasher.VerifyHashedPassword(user, user.PasswordHash, Input.Password) == PasswordVerificationResult.Failed)
+        var candidate = user ?? new User { PasswordHash = DummyPasswordHash };
+        var verified = hasher.VerifyHashedPassword(candidate, candidate.PasswordHash, Input.Password)
+            != PasswordVerificationResult.Failed;
+
+        if (user == null || !verified)
         {
             // Deliberately generic — don't reveal whether the username exists.
             _error = "Invalid username or password.";
@@ -77,7 +88,37 @@
         var identity = new ClaimsIdentity(claims, CookieAuthenticationDefaults.AuthenticationScheme);
         await HttpContext.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, new ClaimsPrincipal(identity));
 
-        Nav.NavigateTo(string.IsNullOrEmpty(ReturnUrl) ? "/" : ReturnUrl, forceLoad: true);
+        Nav.NavigateTo(ResolveReturnUrl(), forceLoad: true);
+    }
+
+    // ReturnUrl arrives from the query string, so it's attacker-controllable:
+    // /login?ReturnUrl=https://evil.example sends the user off-site at the one
+    // moment they've just proven they trust this page. Only same-origin
+    // destinations are honoured, anything else falls back to the home page.
+    //
+    // Absolute URLs can't simply be rejected — RedirectToLogin.razor passes
+    // NavigationManager.Uri, which is always absolute — so same-origin
+    // absolutes are accepted and reduced to their path.
+    private string ResolveReturnUrl()
+    {
+        if (string.IsNullOrWhiteSpace(ReturnUrl)) return "/";
+
+        if (Uri.TryCreate(ReturnUrl, UriKind.Absolute, out var absolute))
+        {
+            var sameOrigin = Uri.Compare(
+                absolute, new Uri(Nav.BaseUri),
+                UriComponents.SchemeAndServer, UriFormat.Unescaped,
+                StringComparison.OrdinalIgnoreCase) == 0;
+            return sameOrigin ? absolute.PathAndQuery : "/";
+        }
+
+        // Must be rooted, and must not be protocol-relative ("//evil.example"
+        // or "/\evil.example", both of which browsers treat as off-site).
+        return ReturnUrl.Length > 1
+            && ReturnUrl[0] == '/'
+            && ReturnUrl[1] != '/'
+            && ReturnUrl[1] != '\\'
+            ? ReturnUrl : "/";
     }
 
     private class LoginModel

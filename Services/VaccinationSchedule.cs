@@ -52,8 +52,16 @@ public class VaccinationSchedule
 
     public record VaccineWithStatus(ScheduledVaccine Vaccine, VaccinationStatus Status, DateTime? GivenAt);
 
-    public static List<VaccineWithStatus> BuildStatus(int ageInWeeks, IReadOnlyCollection<VaccinationRecord> given)
+    // suppressed is a second, independent line of defense for a bereaved
+    // profile's infant content (see UserProfile.CareContext) — the primary
+    // one is structural: no InfantProfile row is ever created for a baby
+    // who didn't survive, so every caller here naturally has nothing to
+    // iterate over already. This parameter means that guarantee doesn't
+    // depend solely on that data-model assumption never changing.
+    public static List<VaccineWithStatus> BuildStatus(int ageInWeeks, IReadOnlyCollection<VaccinationRecord> given, bool suppressed = false)
     {
+        if (suppressed) return [];
+
         var givenByName = given.ToDictionary(g => g.VaccineName, g => g.GivenAt);
 
         return Schedule.Select(v =>

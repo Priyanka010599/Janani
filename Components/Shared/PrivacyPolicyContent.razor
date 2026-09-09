@@ -1,0 +1,43 @@
+@* Components/Shared/PrivacyPolicyContent.razor
+   The actual policy text, factored out so Privacy.razor (the standalone
+   page) and the in-page popup dialog (Settings.razor, Register.razor) show
+   the exact same content instead of two copies that can drift apart. *@
+
+<div class="sos-card">
+    <h3>Who this is</h3>
+    <p>Janani is a Patchamomma 2026 project — a real, working app, but not a certified medical device and not audited for HIPAA/GDPR-style compliance. Treat it accordingly: it's built with care, but it's student software, not a hospital system.</p>
+</div>
+
+<div class="sos-card">
+    <h3>What we store, and why</h3>
+    <ul>
+        <li><strong>Account info</strong> — your name, username, email, and a hashed password (never the password itself). Used only to log you in.</li>
+        <li><strong>Pregnancy &amp; postpartum data</strong> — delivery date/type, complications, feeding method, vitals, mood check-ins, and daily postpartum check-ins. Used to generate your recovery plan and to detect concerning patterns via fixed clinical thresholds, not guesswork.</li>
+        <li><strong>EPDS-10 mental health screening</strong> — a validated depression screening you can optionally take on days 10 and 42 postpartum. Scores are stored so a concerning result can be flagged; this is a screening tool, not a diagnosis.</li>
+        <li><strong>Doctor contact info</strong> — a name/email you choose to add, used only to automatically email that doctor if something Critical is flagged for you or someone you care for. Never used for anything else.</li>
+        <li><strong>Journal entries &amp; photos</strong> — your private journal text is stored in our database. Photos are stored in a private Google Cloud Storage bucket; nobody can view them directly, and the app itself only ever shows you a short-lived (15 minute) signed link generated at the moment you open the page.</li>
+        <li><strong>Elder &amp; infant profiles</strong> — if you're a caregiver, the profiles and vitals/growth data you enter for the people you care for.</li>
+        <li><strong>Shared care access</strong> — if you explicitly grant another Janani account access to an elder or infant profile, that account can see the same data you can for that profile. Nothing is shared automatically.</li>
+        <li><strong>Push notification tokens</strong> — if you enable notifications, your device's Firebase push token, used only to deliver alerts you'd otherwise miss.</li>
+        <li><strong>Google Calendar / Gmail</strong> — only if you choose to connect them in Settings. Calendar access is used only to sync appointments you add in Janani; Gmail access is used only to send the doctor-alert emails described above.</li>
+    </ul>
+</div>
+
+<div class="sos-card">
+    <h3>What we don't do</h3>
+    <ul>
+        <li>No ad trackers, no analytics pixels, no selling or sharing your data with third parties.</li>
+        <li>Your data is never used to train any AI model.</li>
+        <li>The AI companion never decides whether something is medically concerning — that's always a fixed, published clinical rule. The AI is only ever asked to explain an alert that's already been raised, in plain language.</li>
+    </ul>
+</div>
+
+<div class="sos-card">
+    <h3>Where it lives</h3>
+    <p>Everything is stored on Google Cloud (Cloud SQL for your data, Cloud Storage for photos) in the same Google Cloud project that runs this app. Nothing is stored on a third-party analytics or marketing platform.</p>
+</div>
+
+<div class="sos-card">
+    <h3>Deleting your data</h3>
+    <p>Account deletion isn't self-service yet — this is a hackathon build, not a finished product. If you'd like your data removed, contact whoever set up this instance for you.</p>
+</div>

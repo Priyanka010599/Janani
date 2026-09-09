@@ -21,8 +21,10 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.Identity;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.AspNetCore.ResponseCompression;
 using Microsoft.EntityFrameworkCore;
+using System.Threading.RateLimiting;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -33,7 +35,15 @@ var builder = WebApplication.CreateBuilder(args);
 // jsonPayload instead of one opaque text blob per entry -- no new GCP
 // resource or client library needed, Cloud Run already ships stdout there.
 // Local `dotnet run` keeps the default human-readable console.
-if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("K_SERVICE")))
+// K_SERVICE is set on every Cloud Run instance and nowhere else, which makes
+// it the one reliable "am I actually deployed?" signal — more reliable here
+// than IsDevelopment(), because ASPNETCORE_ENVIRONMENT is deliberately set to
+// Development on the deployed image so the edge-device demo can post vitals
+// without a provisioned DEVICE_INGEST_TOKEN. Anything whose safety depends on
+// being deployed keys off this, not off the environment name.
+var isCloudRun = !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("K_SERVICE"));
+
+if (isCloudRun)
 {
     builder.Logging.ClearProviders();
     builder.Logging.AddJsonConsole(options =>
@@ -74,6 +84,22 @@ builder.Services.AddScoped<IPregnancyDeviceAuthenticator, PerUserPregnancyDevice
 
 // Persist the Data Protection key ring in the same database — see
 // AppDbContext's IDataProtectionKeyContext comment for why this matters.
+// The key ring protects BOTH the auth cookie and the Google Calendar
+// access/refresh tokens (see GoogleCalendarSyncService). Persisted alone, it
+// sits in plaintext in the same database as the ciphertext it protects — so a
+// single database read would yield the power to forge any user's session and
+// to decrypt every connected user's Google refresh token. DP_KMS_KEY_NAME
+// wraps the ring with Cloud KMS so the database alone is no longer enough.
+//
+// NOT YET FIXED — known, accepted risk. The intended fix is
+// .ProtectKeysWithGoogleKms(...), but the only published package
+// (Google.Cloud.AspNetCore.DataProtection.Kms) is 1.0.0-alpha04, and an alpha
+// dependency sitting on the auth-cookie path is a worse trade than the risk it
+// closes. Alternatives when this is picked up: wrap with an X.509 cert via
+// ProtectKeysWithCertificate, or move the calendar tokens off DataProtection
+// onto AES-GCM with a key held in Secret Manager. Until then, treat database
+// backups as containing session-forging and OAuth-token material, and restrict
+// them accordingly.
 builder.Services.AddDataProtection()
     .PersistKeysToDbContext<AppDbContext>()
     .SetApplicationName("Janani");
@@ -92,6 +118,20 @@ builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationSc
         options.Cookie.Name = "Janani.Auth";
         options.ExpireTimeSpan = TimeSpan.FromDays(30);
         options.SlidingExpiration = true;
+        options.Cookie.HttpOnly = true;
+        // SameSite stays Lax rather than Strict: the Google Calendar OAuth
+        // callback (/calendar/callback/google) is a cross-site top-level
+        // navigation back from Google's consent screen, and Strict would
+        // withhold the auth cookie there — the callback would fail auth and
+        // calendar connect would break. Lax still blocks the cross-site POST
+        // and subresource cases, and UseAntiforgery covers form posts.
+        options.Cookie.SameSite = SameSiteMode.Lax;
+        // Always over HTTPS once deployed. Local dev runs on plain
+        // http://localhost, where an Always cookie would simply never be set
+        // and login would fail silently — so it's relaxed there only.
+        options.Cookie.SecurePolicy = isCloudRun
+            ? CookieSecurePolicy.Always
+            : CookieSecurePolicy.SameAsRequest;
     });
 builder.Services.AddAuthorization(options =>
     options.FallbackPolicy = new AuthorizationPolicyBuilder()
@@ -100,7 +140,69 @@ builder.Services.AddAuthorization(options =>
 builder.Services.AddCascadingAuthenticationState();
 builder.Services.AddScoped<CurrentUserService>();
 builder.Services.AddScoped<ICalendarSyncService, GoogleCalendarSyncService>();
-builder.Services.AddSingleton<IEmailNotificationService, SmtpEmailNotificationService>();
+// Resend when a key is present, Gmail SMTP otherwise. Not a preference toggle —
+// it's so the currently-deployed instance, which only holds the SMTP secrets,
+// keeps sending doctor alerts until the Resend key is actually provisioned.
+// Once RESEND_API_KEY is set everywhere, the SMTP implementation and its
+// secrets can be retired. See ResendEmailNotificationService's header for why
+// neither can authenticate as the Cloud Run service account.
+if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("RESEND_API_KEY")?.Trim()))
+    builder.Services.AddHttpClient<IEmailNotificationService, ResendEmailNotificationService>();
+else
+    builder.Services.AddSingleton<IEmailNotificationService, SmtpEmailNotificationService>();
+
+// ── Rate limiting ───────────────────────────────────────────────────────────
+// Login had no throttle of any kind: unlimited password guesses, no lockout,
+// against a 30-day sliding cookie. The device-ingest endpoints were equally
+// unbounded, and every agent-backed page costs real Vertex AI spend per call.
+//
+// This is a global limiter that partitions BY PATH and lets everything else
+// through unlimited on purpose — Blazor Server's SignalR circuit (/_blazor)
+// carries every UI interaction over one long-lived connection, so a blanket
+// limiter would throttle ordinary clicking and break the app.
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(context =>
+    {
+        var path = context.Request.Path.Value ?? "";
+        // Behind Cloud Run, RemoteIpAddress is the real client only because
+        // UseForwardedHeaders has already rewritten it from X-Forwarded-For.
+        var client = context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+
+        if (path.StartsWith("/login", StringComparison.OrdinalIgnoreCase) ||
+            path.StartsWith("/register", StringComparison.OrdinalIgnoreCase))
+        {
+            // 20 rather than a tighter 5-10: several people demoing from
+            // behind one NAT share a source IP, and being locked out at the
+            // login screen mid-demo is its own kind of failure. 20 attempts
+            // per quarter-hour is still nowhere near enough to brute-force a
+            // password, which is what this is here to stop.
+            return RateLimitPartition.GetFixedWindowLimiter($"auth:{client}", _ =>
+                new FixedWindowRateLimiterOptions
+                {
+                    PermitLimit = 20,
+                    Window = TimeSpan.FromMinutes(15),
+                    QueueLimit = 0
+                });
+        }
+
+        if (path.StartsWith("/api/", StringComparison.OrdinalIgnoreCase))
+        {
+            // Generous enough for a device flushing a store-and-forward
+            // backlog in capture order after a reconnect (edge-device-sim/).
+            return RateLimitPartition.GetFixedWindowLimiter($"api:{client}", _ =>
+                new FixedWindowRateLimiterOptions
+                {
+                    PermitLimit = 120,
+                    Window = TimeSpan.FromMinutes(1),
+                    QueueLimit = 0
+                });
+        }
+
+        return RateLimitPartition.GetNoLimiter("unlimited");
+    });
+});
 
 // ── Response compression ───────────────────────────────────────────────────
 builder.Services.AddResponseCompression(options =>
@@ -1123,11 +1225,40 @@ forwardedHeadersOptions.KnownNetworks.Clear();
 forwardedHeadersOptions.KnownProxies.Clear();
 app.UseForwardedHeaders(forwardedHeadersOptions);
 
-if (!app.Environment.IsDevelopment())
+// Keyed on isCloudRun rather than !IsDevelopment(): the deployed image sets
+// ASPNETCORE_ENVIRONMENT=Development for the demo, and under the old check
+// that would have switched OFF the exception handler in production — serving
+// the developer exception page, stack traces and all, to the public internet
+// on any unhandled error. Whether an error page is safe to show depends on
+// where the app is running, not on what the environment is called.
+if (isCloudRun || !app.Environment.IsDevelopment())
 {
     app.UseExceptionHandler("/Error", createScopeForErrors: true);
     app.UseHsts();
 }
+
+app.UseRateLimiter();
+
+// Baseline security response headers. Deliberately conservative on CSP: this
+// is Blazor Server, and a script-src directive would have to account for the
+// framework's own inline bootstrap plus the inline onclick handlers in
+// Register.razor's privacy dialog, so locking scripts down is a separate
+// change with its own testing. What's here can't break rendering:
+//   nosniff        — stop MIME-sniffing an upload into something executable
+//   frame-ancestors— clickjacking; the app is never meant to be framed
+//   base-uri       — stop an injected <base> re-pointing every relative URL
+//   object-src     — no plugin content anywhere in the app
+//   Referrer-Policy— journal/vitals URLs shouldn't leak to third parties
+app.Use(async (context, next) =>
+{
+    var headers = context.Response.Headers;
+    headers["X-Content-Type-Options"] = "nosniff";
+    headers["Referrer-Policy"] = "strict-origin-when-cross-origin";
+    headers["X-Frame-Options"] = "DENY";
+    headers["Content-Security-Policy"] =
+        "frame-ancestors 'none'; base-uri 'self'; object-src 'none'";
+    await next();
+});
 
 app.UseResponseCompression();
 app.UseHttpsRedirection();
@@ -1184,10 +1315,33 @@ app.MapPost("/api/events/pubsub", async (HttpContext ctx, PushNotificationServic
     // on how they were written, which would otherwise make this exact-match
     // check always fail against a genuinely correct incoming token.
     var verificationToken = Environment.GetEnvironmentVariable("PUBSUB_VERIFICATION_TOKEN")?.Trim();
-    if (!string.IsNullOrEmpty(verificationToken))
+
+    // Previously: an unset token skipped the check entirely. That fail-open
+    // mattered because the handler below acts on a UserId taken straight from
+    // the request body — an unauthenticated caller could push arbitrary
+    // notification text to any user's devices, which on a maternal-health app
+    // is a ready-made phishing and panic vector. Deployed instances now
+    // refuse rather than trust; local dev (no Pub/Sub) keeps working.
+    if (string.IsNullOrEmpty(verificationToken))
     {
-        var incoming = ctx.Request.Query["token"].ToString();
-        if (incoming != verificationToken)
+        if (isCloudRun)
+        {
+            log.LogError("Rejected Pub/Sub push: PUBSUB_VERIFICATION_TOKEN is not configured.");
+            return Results.StatusCode(403);
+        }
+    }
+    else
+    {
+        // Header first — a query-string secret ends up in Cloud Run request
+        // logs, browser history and Referer headers. The query form is still
+        // accepted so existing push subscriptions keep working until they're
+        // reconfigured to send the header.
+        var incoming = ctx.Request.Headers.Authorization.ToString();
+        incoming = incoming.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase)
+            ? incoming["Bearer ".Length..].Trim()
+            : ctx.Request.Query["token"].ToString();
+
+        if (!TokenComparer.Matches(verificationToken, incoming))
             return Results.StatusCode(403);
     }
 
@@ -1200,7 +1354,15 @@ app.MapPost("/api/events/pubsub", async (HttpContext ctx, PushNotificationServic
         var data = messageEl.GetProperty("data").GetString() ?? "";
         var decoded = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(data));
         var attrs = messageEl.TryGetProperty("attributes", out var a) ? a.ToString() : "{}";
-        log.LogInformation("Pub/Sub push received — EventType: {Attrs} Payload: {Data}", attrs, decoded);
+        // The decoded payload used to be logged in full. Alert bodies name the
+        // mother and describe her clinical condition, so that put health data
+        // into Cloud Logging — a broader access boundary than the database,
+        // and retained on its own schedule. Log shape and size, not content;
+        // the full payload stays available in dev where it's useful.
+        if (isCloudRun)
+            log.LogInformation("Pub/Sub push received — attributes: {Attrs}, payload {Bytes} bytes", attrs, decoded.Length);
+        else
+            log.LogInformation("Pub/Sub push received — EventType: {Attrs} Payload: {Data}", attrs, decoded);
 
         // Every push subscription (mood/meal/birthplan/journal + alert-events)
         // lands here -- only alert-notification actually needs to do
@@ -1323,11 +1485,15 @@ app.MapPost("/api/pregnancy/vitals", async (
     var body = await ctx.Request.ReadFromJsonAsync<PregnancyDeviceVitalsRequest>(ct);
     if (body == null) return Results.BadRequest();
 
-    var profile = await db.UserProfiles.FirstOrDefaultAsync(p => p.UserId == body.UserId, ct);
-    if (profile == null) return Results.NotFound();
-
+    // Auth runs BEFORE the profile lookup, and a missing profile now returns
+    // the same 403 as a bad token. The old order answered 404 for an unknown
+    // id and 403 for a known one, which let an unauthenticated caller walk the
+    // id space and learn exactly which accounts exist.
     if (!await deviceAuth.AuthorizeAsync(body.UserId, body.PairingToken, ct))
         return Results.StatusCode(403);
+
+    var profile = await db.UserProfiles.FirstOrDefaultAsync(p => p.UserId == body.UserId, ct);
+    if (profile == null) return Results.StatusCode(403);
 
     var reading = new PregnancyVitalsReading
     {

@@ -72,11 +72,24 @@
                 </label>
                 <p class="sos-hint">All of these can be changed any time later in your profile.</p>
             </div>
+            <div class="form-field">
+                <label class="checkbox-field">
+                    <InputCheckbox @bind-Value="Input.AgreedToPrivacy" />
+                    I agree to the <button type="button" class="link-btn" onclick="document.getElementById('privacy-dialog').showModal()">Privacy Policy</button>
+                </label>
+                <ValidationMessage For="() => Input.AgreedToPrivacy" />
+            </div>
             <button class="bloom-btn primary" type="submit">Create my account 🌷</button>
         </EditForm>
 
         <p class="auth-switch">Already have an account? <a href="/login">Log in</a></p>
     </div>
+
+    <dialog id="privacy-dialog" class="privacy-dialog">
+        <h1>🔒 Privacy Policy</h1>
+        <PrivacyPolicyContent />
+        <button type="button" class="bloom-btn secondary small-btn" onclick="document.getElementById('privacy-dialog').close()">Close</button>
+    </dialog>
 </div>
 
 @code {
@@ -97,9 +110,15 @@
             _error = "That username is already taken.";
             return;
         }
+        // Username collisions have to be reported — the user has to pick a
+        // different one. Email collisions don't: the old message confirmed to
+        // any visitor that a given address has a Janani account, which for a
+        // pregnancy and postpartum app discloses something genuinely private
+        // about a person who never consented to the lookup. Point at login
+        // instead — true either way, and it reveals nothing.
         if (await Db.Users.AnyAsync(u => u.Email == email))
         {
-            _error = "An account with this email already exists.";
+            _error = "We couldn't create that account. If you've registered before, try logging in instead.";
             return;
         }
 
@@ -195,5 +214,8 @@
         public bool NotPregnant { get; set; }
         public bool CaresForElder { get; set; }
         public bool CaresForInfant { get; set; }
+
+        [Range(typeof(bool), "true", "true", ErrorMessage = "You need to agree to the Privacy Policy to create an account.")]
+        public bool AgreedToPrivacy { get; set; }
     }
 }

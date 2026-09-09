@@ -34,7 +34,10 @@ public class CompanionService(HttpClient agentServiceClient, CurrentUserService 
             pregnancyWeek = ctx.PregnancyWeek,
             language = ctx.Language.ToString(),
             workingWomanMode = ctx.WorkingWomanMode,
-            lastMood = ctx.LastMood
+            lastMood = ctx.LastMood,
+            isBereaved = ctx.IsBereaved,
+            birthOutcome = ctx.BirthOutcome,
+            babyName = ctx.BabyName
         };
 
         using var httpRequest = new HttpRequestMessage(HttpMethod.Post, "/agents/companion/chat")

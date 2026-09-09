@@ -68,25 +68,12 @@ if ($LASTEXITCODE -ne 0) {
     Start-Sleep -Seconds 10
 }
 
-# -- 2. Secret Manager - GEMINI_API_KEY + Pub/Sub token -----------------------
+# -- 2. Secret Manager - Pub/Sub token + calendar OAuth -----------------------
+# No Gemini API key secret here: janani-agents authenticates to Gemini via
+# Vertex AI IAM (the runtime service account), not a Developer API key, and
+# janani-app itself never read this secret's env var -- GEMINI_API_KEY was
+# vestigial on janani-app all along.
 Write-Host "`n[2/10] Ensuring secrets exist in Secret Manager..." -ForegroundColor Yellow
-gcloud secrets describe janani-gemini-key --project=$ProjectId 2>$null
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "  Secret not found - creating placeholder." -ForegroundColor Cyan
-    "REPLACE_WITH_REAL_KEY" | gcloud secrets create janani-gemini-key --data-file=- --project=$ProjectId
-}
-# Out-String + Trim guarantees a clean scalar string - piping a
-# multi-line/trailing-newline native command result straight into a variable
-# can silently produce an array, which corrupts later string interpolation.
-$GeminiKey = (gcloud secrets versions access latest --secret=janani-gemini-key --project=$ProjectId | Out-String).Trim()
-if ($GeminiKey -eq "REPLACE_WITH_REAL_KEY") {
-    Write-Host "`nGEMINI_API_KEY is still the placeholder value." -ForegroundColor Red
-    Write-Host "Get a key from https://aistudio.google.com/apikey, then run:" -ForegroundColor Red
-    Write-Host "  `"YOUR_KEY`" | gcloud secrets versions add janani-gemini-key --data-file=- --project=$ProjectId" -ForegroundColor Yellow
-    Write-Host "...then re-run this script." -ForegroundColor Red
-    exit 1
-}
-
 gcloud secrets describe janani-pubsub-token --project=$ProjectId 2>$null
 if ($LASTEXITCODE -ne 0) {
     $NewToken = [System.Guid]::NewGuid().ToString()
@@ -280,7 +267,7 @@ for ($attempt = 1; $attempt -le 3; $attempt++) {
         --concurrency 80 `
         --timeout 300 `
         --set-env-vars $EnvVars `
-        --set-secrets "GEMINI_API_KEY=janani-gemini-key:latest,PUBSUB_VERIFICATION_TOKEN=janani-pubsub-token:latest,DATABASE_URL=janani-database-url:latest,GOOGLE_CALENDAR_CLIENT_ID=janani-google-calendar-client-id:latest,GOOGLE_CALENDAR_CLIENT_SECRET=janani-google-calendar-client-secret:latest" `
+        --set-secrets "PUBSUB_VERIFICATION_TOKEN=janani-pubsub-token:latest,DATABASE_URL=janani-database-url:latest,GOOGLE_CALENDAR_CLIENT_ID=janani-google-calendar-client-id:latest,GOOGLE_CALENDAR_CLIENT_SECRET=janani-google-calendar-client-secret:latest" `
         --project $ProjectId
     if ($LASTEXITCODE -eq 0) { break }
     if ($attempt -lt 3) {

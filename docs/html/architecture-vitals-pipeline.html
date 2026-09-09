@@ -1,0 +1,251 @@
+<title>Janani Vitals Pipeline</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Source+Sans+3:ital,wght@0,400;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+:root{
+  --paper:#EEF1F3;
+  --ink:#1B2226;
+  --ink-soft:#55636B;
+  --rule:#D3D9DC;
+  --card:#E3E8EA;
+  --accent:#B23A56;
+  --accent-soft:#F3DEE2;
+  --live:#2E6E5E;
+  --live-bg:#DCEAE3;
+  --planned:#A97327;
+  --planned-bg:#F1E4C9;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --paper:#12161A; --ink:#E6EBEE; --ink-soft:#9AA7AD; --rule:#2B3338;
+    --card:#1A2024; --accent:#E38098; --accent-soft:#3A2229;
+    --live:#7FCBB2; --live-bg:#1E332C; --planned:#E0B268; --planned-bg:#3A2F19;
+  }
+}
+:root[data-theme="dark"]{
+  --paper:#12161A; --ink:#E6EBEE; --ink-soft:#9AA7AD; --rule:#2B3338;
+  --card:#1A2024; --accent:#E38098; --accent-soft:#3A2229;
+  --live:#7FCBB2; --live-bg:#1E332C; --planned:#E0B268; --planned-bg:#3A2F19;
+}
+*{box-sizing:border-box;}
+body{
+  background:var(--paper); color:var(--ink);
+  font-family:"Source Sans 3", ui-sans-serif, system-ui, sans-serif;
+  font-size:17px; line-height:1.6; padding:0 24px 80px;
+}
+.wrap{max-width:920px; margin:0 auto;}
+header{padding-top:48px; border-bottom:1px solid var(--rule); padding-bottom:26px; margin-bottom:32px;}
+.kicker{
+  font-family:"IBM Plex Mono", monospace; font-size:12px; letter-spacing:0.09em;
+  text-transform:uppercase; color:var(--accent); margin-bottom:14px;
+}
+h1{
+  font-family:"Fraunces", Georgia, serif; font-weight:600; font-size:2.1rem;
+  line-height:1.15; text-wrap:balance; margin:0 0 10px; letter-spacing:-0.01em;
+}
+.subhead{
+  font-family:"Fraunces", Georgia, serif; font-style:italic; font-weight:400;
+  font-size:1.1rem; color:var(--ink-soft); margin:0; text-wrap:balance;
+}
+p.lede{max-width:66ch; font-size:1.02rem;}
+h2{
+  font-family:"Fraunces", Georgia, serif; font-weight:600; font-size:1.3rem;
+  margin:44px 0 14px;
+}
+figure{margin:0 0 8px; padding:20px; background:var(--card); border:1px solid var(--rule); border-radius:12px; overflow-x:auto;}
+svg{max-width:100%; height:auto; display:block; margin:0 auto;}
+figcaption{
+  font-size:0.92rem; color:var(--ink-soft); max-width:70ch; margin:14px auto 0;
+  text-align:center; font-style:italic;
+}
+.legend{
+  display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:10px;
+  margin:28px 0 40px; padding:0; list-style:none;
+}
+.legend li{
+  display:flex; align-items:center; gap:10px; font-size:0.9rem; color:var(--ink-soft);
+  background:var(--card); border:1px solid var(--rule); border-radius:8px; padding:10px 14px;
+}
+.swatch{width:26px; height:14px; flex:none;}
+.swatch.solid{border-bottom:2px solid var(--ink-soft);}
+.swatch.dashed{border-bottom:2px dashed var(--ink-soft);}
+.swatch.boundary{border:2px solid var(--accent); border-radius:3px; height:14px;}
+.pill{
+  font-family:"IBM Plex Mono", monospace; font-size:11px; letter-spacing:0.05em;
+  text-transform:uppercase; padding:3px 9px 4px; border-radius:100px; font-weight:500;
+}
+.pill.live{background:var(--live-bg); color:var(--live);}
+.pill.planned{background:var(--planned-bg); color:var(--planned);}
+.notes{margin:0 0 32px;}
+.notes li{margin-bottom:10px;}
+code{
+  font-family:"IBM Plex Mono", monospace; font-size:0.87em; background:var(--card);
+  border:1px solid var(--rule); padding:0.1em 0.4em; border-radius:4px;
+}
+footer{font-size:0.9rem; color:var(--ink-soft); font-style:italic; border-top:1px solid var(--rule); padding-top:20px; margin-top:8px;}
+@media (max-width:600px){ body{font-size:16px;} h1{font-size:1.7rem;} }
+</style>
+
+<div class="wrap">
+<header>
+  <div class="kicker">Architecture Reference · Janani / Bloom Companion</div>
+  <h1>The Vitals Pipeline, End to End</h1>
+  <p class="subhead">One ingestion path, whether the reading comes from seed data, the edge-device simulator, or — eventually — a real sensor.</p>
+</header>
+
+<p class="lede">This is the mechanism the offline-first design post argues for, drawn as it actually runs today. Every box below is real code (<code>VitalsIngestService</code>, <code>VitalsThresholdChecker</code>, <code>PushNotificationService</code>); the one dashed source box is the only thing on this page that doesn't exist yet.</p>
+
+<h2>Pipeline</h2>
+
+<figure>
+<svg viewBox="0 0 1040 1110" role="img" aria-label="A vitals reading from seed data, the edge simulator, or a future ESP32 device all POST to one ingest endpoint, which dedupes by DeviceReadingId, saves the reading, and runs it through a pure deterministic threshold checker before any alert exists. Only if a concern is found does Gemini narrate it — with a deterministic text fallback if that call fails — and only then does an alert get saved and fanned out to every caregiver via Pub/Sub with a direct-FCM fallback, plus a one-time doctor email if the severity is critical.">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+    </marker>
+  </defs>
+
+  <g fill="none" stroke="currentColor" stroke-width="1.6" font-family="IBM Plex Mono, monospace">
+
+    <!-- Sources -->
+    <rect x="60" y="20" width="280" height="80" rx="8"/>
+    <text x="200" y="52" text-anchor="middle" fill="currentColor" stroke="none" font-size="12.5">Seed data generator</text>
+    <text x="200" y="70" text-anchor="middle" fill="currentColor" stroke="none" font-size="10.5" opacity="0.7">Program.cs — SeedDemoAccount</text>
+    <text x="200" y="88" text-anchor="middle" fill="var(--live)" stroke="none" font-size="9.5" font-weight="600">LIVE</text>
+
+    <rect x="380" y="20" width="280" height="80" rx="8"/>
+    <text x="520" y="45" text-anchor="middle" fill="currentColor" stroke="none" font-size="12.5">Edge-device simulator</text>
+    <text x="520" y="63" text-anchor="middle" fill="currentColor" stroke="none" font-size="10.5" opacity="0.7">vitals_edge_simulator.py</text>
+    <text x="520" y="78" text-anchor="middle" fill="currentColor" stroke="none" font-size="10.5" opacity="0.7">sims ESP32+MAX30102/AI Hub</text>
+    <text x="520" y="94" text-anchor="middle" fill="var(--live)" stroke="none" font-size="9.5" font-weight="600">LIVE (software sim)</text>
+
+    <rect x="700" y="20" width="280" height="80" rx="8" stroke-dasharray="6 5" stroke="var(--planned)"/>
+    <text x="840" y="45" text-anchor="middle" fill="var(--planned)" stroke="none" font-size="12.5">Real ESP32 + MAX30102</text>
+    <text x="840" y="63" text-anchor="middle" fill="var(--planned)" stroke="none" font-size="10.5" opacity="0.8">on-device inference,</text>
+    <text x="840" y="78" text-anchor="middle" fill="var(--planned)" stroke="none" font-size="10.5" opacity="0.8">Qualcomm AI Hub</text>
+    <text x="840" y="94" text-anchor="middle" fill="var(--planned)" stroke="none" font-size="9.5" font-weight="600">PLANNED — not built</text>
+
+    <!-- converge to ingest -->
+    <line x1="200" y1="100" x2="450" y2="150" marker-end="url(#arrow)"/>
+    <line x1="520" y1="100" x2="520" y2="150" marker-end="url(#arrow)"/>
+    <line x1="840" y1="100" x2="590" y2="150" marker-end="url(#arrow)" stroke-dasharray="6 5" stroke="var(--planned)"/>
+
+    <rect x="350" y="150" width="340" height="60" rx="8"/>
+    <text x="520" y="175" text-anchor="middle" fill="currentColor" stroke="none" font-size="12.5">Ingest endpoint</text>
+    <text x="520" y="193" text-anchor="middle" fill="currentColor" stroke="none" font-size="10.5" opacity="0.7">POST /api/elders/{id}/vitals · /api/pregnancy/vitals</text>
+
+    <line x1="520" y1="210" x2="520" y2="240" marker-end="url(#arrow)"/>
+
+    <!-- duplicate diamond -->
+    <polygon points="520,240 620,290 520,340 420,290"/>
+    <text x="520" y="285" text-anchor="middle" fill="currentColor" stroke="none" font-size="11.5">Duplicate</text>
+    <text x="520" y="300" text-anchor="middle" fill="currentColor" stroke="none" font-size="10" opacity="0.7">DeviceReadingId?</text>
+
+    <line x1="620" y1="290" x2="758" y2="290" marker-end="url(#arrow)" stroke-dasharray="4 4"/>
+    <text x="690" y="280" text-anchor="middle" fill="currentColor" stroke="none" font-size="10">yes</text>
+    <rect x="760" y="265" width="220" height="50" rx="8" stroke-dasharray="4 4" opacity="0.75"/>
+    <text x="870" y="288" text-anchor="middle" fill="var(--ink-soft)" stroke="none" font-size="11">No-op — never saved,</text>
+    <text x="870" y="303" text-anchor="middle" fill="var(--ink-soft)" stroke="none" font-size="11">never re-alerted</text>
+
+    <line x1="520" y1="340" x2="520" y2="370" marker-end="url(#arrow)"/>
+    <text x="536" y="358" fill="currentColor" stroke="none" font-size="10">no</text>
+
+    <rect x="370" y="370" width="300" height="60" rx="8"/>
+    <text x="520" y="395" text-anchor="middle" fill="currentColor" stroke="none" font-size="12.5">Save reading</text>
+    <text x="520" y="413" text-anchor="middle" fill="currentColor" stroke="none" font-size="10.5" opacity="0.7">unique index enforces dedup at the DB too</text>
+
+    <line x1="520" y1="430" x2="520" y2="460" marker-end="url(#arrow)"/>
+
+    <!-- checker: safety boundary -->
+    <rect x="350" y="460" width="340" height="70" rx="8" stroke="var(--accent)" stroke-width="2.4" fill="var(--accent-soft)" fill-opacity="0.5"/>
+    <text x="520" y="488" text-anchor="middle" fill="var(--accent)" stroke="none" font-size="13" font-weight="600">VitalsThresholdChecker.Check()</text>
+    <text x="520" y="507" text-anchor="middle" fill="var(--accent)" stroke="none" font-size="10.5">pure function — no network call, no LLM</text>
+    <text x="520" y="522" text-anchor="middle" fill="var(--accent)" stroke="none" font-size="10.5">this is the only thing that decides severity</text>
+
+    <line x1="520" y1="530" x2="520" y2="560" marker-end="url(#arrow)"/>
+
+    <!-- concerns diamond -->
+    <polygon points="520,560 620,610 520,660 420,610"/>
+    <text x="520" y="605" text-anchor="middle" fill="currentColor" stroke="none" font-size="11.5">Any</text>
+    <text x="520" y="620" text-anchor="middle" fill="currentColor" stroke="none" font-size="11.5">concerns?</text>
+
+    <line x1="620" y1="610" x2="758" y2="610" marker-end="url(#arrow)" stroke-dasharray="4 4"/>
+    <text x="690" y="600" text-anchor="middle" fill="currentColor" stroke="none" font-size="10">no</text>
+    <rect x="760" y="585" width="220" height="50" rx="8" stroke-dasharray="4 4" opacity="0.75"/>
+    <text x="870" y="608" text-anchor="middle" fill="var(--ink-soft)" stroke="none" font-size="11">Stored only —</text>
+    <text x="870" y="623" text-anchor="middle" fill="var(--ink-soft)" stroke="none" font-size="11">no alert raised</text>
+
+    <line x1="520" y1="660" x2="520" y2="690" marker-end="url(#arrow)"/>
+    <text x="536" y="678" fill="currentColor" stroke="none" font-size="10">yes</text>
+
+    <!-- gemini split -->
+    <line x1="520" y1="690" x2="430" y2="690" marker-end="url(#arrow)"/>
+    <line x1="520" y1="690" x2="750" y2="690" marker-end="url(#arrow)" stroke-dasharray="5 4"/>
+
+    <rect x="290" y="690" width="280" height="60" rx="8"/>
+    <text x="430" y="713" text-anchor="middle" fill="currentColor" stroke="none" font-size="11.5">Gemini explains the verdict</text>
+    <text x="430" y="730" text-anchor="middle" fill="currentColor" stroke="none" font-size="10" opacity="0.7">narrates — never overrides severity</text>
+
+    <rect x="610" y="690" width="280" height="60" rx="8" stroke-dasharray="5 4" opacity="0.85"/>
+    <text x="750" y="713" text-anchor="middle" fill="var(--ink-soft)" stroke="none" font-size="11.5">Gemini call fails</text>
+    <text x="750" y="730" text-anchor="middle" fill="var(--ink-soft)" stroke="none" font-size="10" opacity="0.8">fallback: plain concern text used</text>
+
+    <line x1="430" y1="750" x2="470" y2="800" marker-end="url(#arrow)"/>
+    <line x1="750" y1="750" x2="570" y2="800" marker-end="url(#arrow)" stroke-dasharray="5 4"/>
+
+    <rect x="370" y="800" width="300" height="60" rx="8"/>
+    <text x="520" y="825" text-anchor="middle" fill="currentColor" stroke="none" font-size="12.5">Alert saved</text>
+    <text x="520" y="843" text-anchor="middle" fill="currentColor" stroke="none" font-size="10.5" opacity="0.7">Severity + Message, either way</text>
+
+    <line x1="520" y1="860" x2="520" y2="890" marker-end="url(#arrow)"/>
+
+    <rect x="350" y="890" width="340" height="60" rx="8"/>
+    <text x="520" y="915" text-anchor="middle" fill="currentColor" stroke="none" font-size="12.5">Notify every caregiver with access</text>
+    <text x="520" y="933" text-anchor="middle" fill="currentColor" stroke="none" font-size="10.5" opacity="0.7">not just whoever logged the reading</text>
+
+    <!-- dispatch fanout -->
+    <line x1="430" y1="950" x2="190" y2="1000" marker-end="url(#arrow)"/>
+    <text x="290" y="975" text-anchor="middle" fill="currentColor" stroke="none" font-size="10">publish</text>
+    <line x1="520" y1="950" x2="530" y2="1000" marker-end="url(#arrow)" stroke-dasharray="5 4"/>
+    <text x="560" y="978" text-anchor="middle" fill="currentColor" stroke="none" font-size="10">fallback if publish fails</text>
+    <line x1="610" y1="950" x2="860" y2="1000" marker-end="url(#arrow)"/>
+    <text x="770" y="975" text-anchor="middle" fill="currentColor" stroke="none" font-size="10">if Critical</text>
+
+    <rect x="40" y="1000" width="300" height="70" rx="8"/>
+    <text x="190" y="1028" text-anchor="middle" fill="currentColor" stroke="none" font-size="12">Pub/Sub</text>
+    <text x="190" y="1045" text-anchor="middle" fill="currentColor" stroke="none" font-size="10" opacity="0.7">janani-alert-events</text>
+    <text x="190" y="1060" text-anchor="middle" fill="currentColor" stroke="none" font-size="9.5" opacity="0.6">Services/PushNotificationService.cs</text>
+
+    <line x1="340" y1="1035" x2="378" y2="1035" marker-end="url(#arrow)"/>
+
+    <rect x="380" y="1000" width="300" height="70" rx="8"/>
+    <text x="530" y="1028" text-anchor="middle" fill="currentColor" stroke="none" font-size="12">FCM push</text>
+    <text x="530" y="1045" text-anchor="middle" fill="currentColor" stroke="none" font-size="10" opacity="0.7">to caregiver devices</text>
+    <text x="530" y="1060" text-anchor="middle" fill="var(--live)" stroke="none" font-size="9.5" font-weight="600">outage-proof by design</text>
+
+    <rect x="720" y="1000" width="280" height="70" rx="8"/>
+    <text x="860" y="1028" text-anchor="middle" fill="currentColor" stroke="none" font-size="12">Email doctor</text>
+    <text x="860" y="1045" text-anchor="middle" fill="currentColor" stroke="none" font-size="10" opacity="0.7">once, if DoctorEmail set</text>
+    <text x="860" y="1060" text-anchor="middle" fill="currentColor" stroke="none" font-size="9.5" opacity="0.6">Critical severity only</text>
+
+  </g>
+</svg>
+<figcaption>A reading from seed data, the edge-device simulator, or a future ESP32 all hit the same ingest endpoint. Dedup and severity are decided before any LLM call exists; Gemini only narrates, and a failed Gemini call still produces a saved, dispatched alert.</figcaption>
+</figure>
+
+<ul class="legend">
+  <li><span class="swatch solid"></span> Live code path, runs today</li>
+  <li><span class="swatch dashed"></span> Dashed = fallback, short-circuit, or not-yet-built</li>
+  <li><span class="swatch boundary"></span> The deterministic safety boundary — the only box that decides severity</li>
+</ul>
+
+<h2>What this diagram is arguing</h2>
+<ul class="notes">
+  <li><strong>Three sources, one endpoint.</strong> The seed generator and the edge simulator already produce the exact same request shape a real ESP32 will — the dashed box changes nothing downstream of the ingest endpoint when it arrives.</li>
+  <li><strong>Dedup now happens twice.</strong> <code>VitalsIngestService.IngestAsync</code> checks <code>DeviceReadingId</code> before insert, and a partial unique index (<code>WHERE "DeviceReadingId" IS NOT NULL</code>) backs it at the database — a retried upload from a flaky connection can't double-alert. <span class="pill live">live</span></li>
+  <li><strong>Ordering is still open.</strong> The endpoint still assumes a device flushes its buffer in capture order after reconnecting; there's no server-side timestamp-reordering yet. <span class="pill planned">designed for, not built</span></li>
+  <li><strong>Gemini sits after the decision, with its own fallback.</strong> If the explain call throws, the code doesn't drop the alert — it falls back to the checker's own concern text and still saves and dispatches. The narration layer can fail without the safety layer failing.</li>
+  <li><strong>Alerting fans out, it doesn't broadcast blindly.</strong> Every caregiver with access gets pushed; only a Critical severity escalates to the doctor by email, and only once.</li>
+</ul>
+
+<footer>Companion diagram to “Designing for Offline-First Health Data Before You Have the Hardware.” Re-drawn after the <code>DeviceReadingId</code> dedup work and the <code>edge-device-sim/</code> simulator landed.</footer>
+</div>

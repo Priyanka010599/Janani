@@ -7,9 +7,8 @@
 @inject CurrentUserService CurrentUser
 @inject BloomAgentRegistry Agents
 @inject UserProfileCache ProfileCache
-@inject PushNotificationService PushNotifications
-@inject IEmailNotificationService EmailNotifications
 @inject CareAccessService CareAccess
+@inject VitalsIngestService VitalsIngest
 @implements IDisposable
 @rendermode InteractiveServer
 
@@ -430,85 +429,27 @@
     {
         if (_selectedElder == null) return;
 
-        Db.VitalsReadings.Add(reading);
-        await Db.SaveChangesAsync();
-        await LoadSystolicTrendAsync();
-        _recentVitals = reading;
-
-        // Deterministic check first (no network call for the normal case);
-        // the agent is only invoked once a concern already exists, to
-        // explain it — see VitalsThresholdChecker for why.
-        var concerns = VitalsThresholdChecker.Check(reading);
-        if (concerns.Count > 0)
+        // Pre-check locally purely to decide whether to show the spinner
+        // while the real (authoritative) check runs inside VitalsIngestService
+        // -- VitalsThresholdChecker.Check is pure/cheap, so checking twice
+        // costs nothing and keeps this page's UI logic simple.
+        var willConcern = VitalsThresholdChecker.Check(reading).Count > 0;
+        if (willConcern)
         {
             _checkingVitals = true;
             StateHasChanged();
-            try
-            {
-                var severity = concerns.Any(c => c.Severity == AlertSeverity.Critical)
-                    ? AlertSeverity.Critical
-                    : AlertSeverity.Warning;
-                var language = (await ProfileCache.GetAsync())?.Language ?? AppLanguage.English;
-                var (explanation, suggestedAction) = await Agents.HealthMonitor.ExplainAsync(_selectedElder, concerns, severity, language);
-
-                var alert = new Alert
-                {
-                    ElderProfileId = _selectedElder.Id,
-                    VitalsReadingId = reading.Id,
-                    Severity = severity,
-                    Message = $"{explanation} {suggestedAction}"
-                };
-                Db.Alerts.Add(alert);
-                await Db.SaveChangesAsync();
-                _activeAlert = alert;
-                await NotifyElderAlertAsync(alert);
-            }
-            catch (Exception)
-            {
-                // The vitals reading itself is already saved — an explanation
-                // failure shouldn't hide that a concern was flagged at all.
-                _activeAlert = new Alert
-                {
-                    ElderProfileId = _selectedElder.Id,
-                    VitalsReadingId = reading.Id,
-                    Severity = concerns.Any(c => c.Severity == AlertSeverity.Critical) ? AlertSeverity.Critical : AlertSeverity.Warning,
-                    Message = string.Join("; ", concerns.Select(c => c.Description))
-                };
-                await NotifyElderAlertAsync(_activeAlert);
-            }
-            _checkingVitals = false;
         }
-    }
 
-    private async Task NotifyElderAlertAsync(Alert alert)
-    {
-        if (_selectedElder == null) return;
-        var prefix = alert.Severity == AlertSeverity.Critical ? "🚨" : "⚠️";
+        var language = (await ProfileCache.GetAsync())?.Language ?? AppLanguage.English;
+        var result = await VitalsIngest.IngestAsync(_selectedElder, reading, language);
 
-        // Every caregiver with access to this elder gets pushed — not just
-        // whoever happened to be logging the reading — since sharing exists
-        // precisely so a critical alert reaches the whole family, not one person.
-        var caregiverIds = await CareAccess.GetCaregiverUserIdsForElderAsync(_selectedElder.Id);
-        foreach (var caregiverId in caregiverIds)
+        await LoadSystolicTrendAsync();
+        _recentVitals = reading;
+        if (result.AlertRaised)
         {
-            await PushNotifications.NotifyUserAsync(caregiverId, $"{prefix} {_selectedElder.Name} needs attention", alert.Message);
+            _activeAlert = result.Alert;
         }
-
-        // Only Critical escalates to the doctor by email — Warning stays
-        // in-app/push only, so the doctor isn't paged for routine flags.
-        // Sent once via whichever caregiver has Gmail connected, not once
-        // per caregiver.
-        if (alert.Severity == AlertSeverity.Critical && !string.IsNullOrWhiteSpace(_selectedElder.DoctorEmail))
-        {
-            var subject = $"Urgent: {_selectedElder.Name} may need attention (via Janani)";
-            var body = $"{alert.Message}\n\nThis is an automated alert from Janani, a family caregiving app, " +
-                       $"sent on behalf of {_selectedElder.Name}'s caregiver because a critical concern was flagged.";
-            foreach (var caregiverId in caregiverIds)
-            {
-                if (await EmailNotifications.SendDoctorAlertAsync(caregiverId, _selectedElder.DoctorEmail!, _selectedElder.DoctorName ?? "Doctor", subject, body))
-                    break;
-            }
-        }
+        _checkingVitals = false;
     }
 
     private async Task AcknowledgeAlertAsync()
@@ -594,7 +535,7 @@
             ["SendSosBtn"] = "Send SOS about this",
             ["SeenThisBtn"] = "I've seen this",
             ["DoctorSectionTitle"] = "Doctor for critical alerts",
-            ["DoctorSectionHint"] = "If something Critical is flagged, Janani can automatically email this doctor (needs Gmail connected in Settings).",
+            ["DoctorSectionHint"] = "If something Critical is flagged, Janani emails this doctor automatically — no setup needed.",
             ["DoctorNamePlaceholder"] = "Doctor's name",
             ["DoctorEmailPlaceholder"] = "Doctor's email",
             ["Save"] = "Save",
@@ -659,7 +600,7 @@
             ["SendSosBtn"] = "इसके बारे में SOS भेजें",
             ["SeenThisBtn"] = "मैंने इसे देख लिया है",
             ["DoctorSectionTitle"] = "गंभीर अलर्ट के लिए डॉक्टर",
-            ["DoctorSectionHint"] = "यदि कुछ गंभीर के रूप में चिह्नित होता है, तो जनानी अपने आप इस डॉक्टर को ईमेल कर सकती है (सेटिंग्स में Gmail कनेक्ट होना ज़रूरी है)।",
+            ["DoctorSectionHint"] = "यदि कुछ गंभीर के रूप में चिह्नित होता है, तो जनानी अपने आप इस डॉक्टर को ईमेल करती है — कोई सेटअप ज़रूरी नहीं।",
             ["DoctorNamePlaceholder"] = "डॉक्टर का नाम",
             ["DoctorEmailPlaceholder"] = "डॉक्टर का ईमेल",
             ["Save"] = "सहेजें",
@@ -724,7 +665,7 @@
             ["SendSosBtn"] = "దీని గురించి SOS పంపండి",
             ["SeenThisBtn"] = "నేను దీన్ని చూశాను",
             ["DoctorSectionTitle"] = "తీవ్రమైన హెచ్చరికల కోసం డాక్టర్",
-            ["DoctorSectionHint"] = "ఏదైనా తీవ్రమైనదిగా గుర్తించబడితే, జననీ స్వయంచాలకంగా ఈ డాక్టర్‌కి ఇమెయిల్ పంపగలదు (సెట్టింగ్‌లలో Gmail కనెక్ట్ చేసి ఉండాలి).",
+            ["DoctorSectionHint"] = "ఏదైనా తీవ్రమైనదిగా గుర్తించబడితే, జననీ స్వయంచాలకంగా ఈ డాక్టర్‌కి ఇమెయిల్ పంపుతుంది — ఎటువంటి సెటప్ అవసరం లేదు.",
             ["DoctorNamePlaceholder"] = "డాక్టర్ పేరు",
             ["DoctorEmailPlaceholder"] = "డాక్టర్ ఇమెయిల్",
             ["Save"] = "సేవ్ చేయండి",

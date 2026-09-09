@@ -2,6 +2,7 @@
 // Google Cloud Storage integration for Janani media, journal photos, and generated assets.
 
 using Google;
+using Google.Apis.Auth.OAuth2;
 using Google.Cloud.Storage.V1;
 
 namespace Janani.Services;
@@ -16,6 +17,7 @@ public class StorageUploadResult
 public class GoogleCloudStorageService
 {
     private readonly StorageClient? _storageClient;
+    private readonly UrlSigner? _urlSigner;
     private readonly string _bucketName;
     private readonly ILogger<GoogleCloudStorageService> _logger;
 
@@ -27,13 +29,23 @@ public class GoogleCloudStorageService
         try
         {
             // Initializes using Application Default Credentials (gcloud auth application-default login or Service Account)
-            _storageClient = StorageClient.Create();
+            var credential = GoogleCredential.GetApplicationDefault();
+            _storageClient = StorageClient.Create(credential);
+            // The bucket has no public-read ACL (journal photos are personal
+            // content), so reads always go through GetSignedUrlAsync rather
+            // than a permanent public link. On Cloud Run this credential is a
+            // ComputeCredential, so UrlSigner signs via the IAM Credentials
+            // API — the runtime service account needs
+            // roles/iam.serviceAccountTokenCreator on itself for that to work
+            // (see deploy-cloudrun.sh).
+            _urlSigner = UrlSigner.FromCredential(credential);
             _logger.LogInformation("Google Cloud Storage client successfully initialized for bucket: {Bucket}", _bucketName);
         }
         catch (Exception ex)
         {
             _logger.LogWarning("Google Cloud Storage client unavailable ({Message}). Falling back to local storage.", ex.Message);
             _storageClient = null;
+            _urlSigner = null;
         }
     }
 
@@ -98,6 +110,24 @@ public class GoogleCloudStorageService
             MediaLink = base64Data,
             IsCloudStorage = false
         };
+    }
+
+    // Bucket/objects are private -- a permanent "public" MediaLink would just
+    // 403. Callers store only the object name and resolve a fresh signed URL
+    // each time a photo is displayed. Returns null if signing is unavailable
+    // (no storage client) or the signing request itself fails.
+    public async Task<string?> GetSignedUrlAsync(string objectName, CancellationToken ct = default)
+    {
+        if (_urlSigner == null) return null;
+        try
+        {
+            return await _urlSigner.SignAsync(_bucketName, objectName, TimeSpan.FromMinutes(15), HttpMethod.Get, cancellationToken: ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning("Failed to sign GCS URL for {ObjectName}: {Message}", objectName, ex.Message);
+            return null;
+        }
     }
 
     private static string fileNamePrefixes(string prefix) => prefix.ToLowerInvariant().Replace(" ", "-");

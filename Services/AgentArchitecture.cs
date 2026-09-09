@@ -66,7 +66,12 @@ public record AgentContext(
     int PregnancyWeek,
     AppLanguage Language,
     bool WorkingWomanMode,
-    string? LastMood = null   // from the most recent mood check-in
+    string? LastMood = null,      // from the most recent mood check-in
+    bool IsBereaved = false,      // from UserProfile.CareContext — see Companion.razor
+    string? BirthOutcome = null,  // the raw BirthOutcome enum name, e.g. "PartialLossMultiple" —
+                                   // IsBereaved alone can't distinguish a full loss from a
+                                   // surviving-twin case, and the two need very different replies
+    string? BabyName = null       // from UserProfile.BabyName, for the bereavement prompt to use gently
 );
 
 // ── Common interface all agents implement ────────────────────────────────────
@@ -110,6 +115,7 @@ public class BloomAgentRegistry
     public DayNurtureService            DayNurture    { get; }
     public ElderNurtureService          ElderNurture  { get; }
     public HealthMonitorService         HealthMonitor { get; }
+    public PregnancyVitalsMonitorService PregnancyVitalsMonitor { get; }
     public PostpartumRecoveryMonitorService PostpartumRecoveryMonitor { get; }
     public CaregiverCoordinationService CaregiverCoordination { get; }
     public InfantCareService            InfantCare    { get; }
@@ -123,6 +129,7 @@ public class BloomAgentRegistry
         DayNurtureService dayNurture,
         ElderNurtureService elderNurture,
         HealthMonitorService healthMonitor,
+        PregnancyVitalsMonitorService pregnancyVitalsMonitor,
         PostpartumRecoveryMonitorService postpartumRecoveryMonitor,
         CaregiverCoordinationService caregiverCoordination,
         InfantCareService infantCare,
@@ -135,6 +142,7 @@ public class BloomAgentRegistry
         DayNurture             = dayNurture;
         ElderNurture           = elderNurture;
         HealthMonitor          = healthMonitor;
+        PregnancyVitalsMonitor = pregnancyVitalsMonitor;
         PostpartumRecoveryMonitor = postpartumRecoveryMonitor;
         CaregiverCoordination  = caregiverCoordination;
         InfantCare             = infantCare;
@@ -150,6 +158,7 @@ public class BloomAgentRegistry
         DayNurture,
         ElderNurture,
         HealthMonitor,
+        PregnancyVitalsMonitor,
         PostpartumRecoveryMonitor,
         CaregiverCoordination,
         InfantCare,

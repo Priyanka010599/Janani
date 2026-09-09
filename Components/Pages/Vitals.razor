@@ -1,0 +1,355 @@
+@page "/vitals"
+@using Janani.Models
+@using Janani.Data
+@using Janani.Services
+@using Microsoft.EntityFrameworkCore
+@inject AppDbContext Db
+@inject CurrentUserService CurrentUser
+@inject PregnancyVitalsIngestService VitalsIngest
+@rendermode InteractiveServer
+
+<PageTitle>Janani — Vitals</PageTitle>
+
+<div class="bloom-container">
+    <div class="section-header">
+        <h1>🩺 @T("Title")</h1>
+        <p class="subtitle">@T("Subtitle")</p>
+    </div>
+
+    @if (_activeAlert != null)
+    {
+        <div class="sos-safety-note">
+            <p>@(_activeAlert.Severity == AlertSeverity.Critical ? "🚨" : "⚠️") @_activeAlert.Message</p>
+            <a class="bloom-btn primary small-btn" href="/emergency">🆘 @T("SendSosBtn")</a>
+            <button class="bloom-btn secondary small-btn" @onclick="AcknowledgeAlertAsync">@T("SeenThisBtn")</button>
+        </div>
+    }
+
+    <div class="plan-card">
+        <h3>🩺 @T("DoctorSectionTitle")</h3>
+        <p class="sos-hint">@T("DoctorSectionHint")</p>
+        <div class="form-row">
+            <input @bind="_doctorNameInput" placeholder="@T("DoctorNamePlaceholder")" />
+            <input @bind="_doctorEmailInput" placeholder="@T("DoctorEmailPlaceholder")" type="email" />
+        </div>
+        <button class="bloom-btn secondary small-btn" @onclick="SaveDoctorContactAsync">@T("Save")</button>
+        @if (_doctorSaved) { <span class="sos-hint">✅ @T("Saved")</span> }
+    </div>
+
+    @if (_recentVitals != null)
+    {
+        <div class="plan-card">
+            <h3>🩺 @T("LastVitalsTitle")</h3>
+            <p>@BuildVitalsSummary(_recentVitals) — @FormatAgo(_recentVitals.RecordedAt)</p>
+            <p class="sos-hint">@(string.IsNullOrEmpty(_recentVitals.Source) ? T("LoggedManually") : string.Format(T("SyncedFromTemplate"), _recentVitals.Source))</p>
+        </div>
+    }
+
+    @if (_systolicTrend.Count >= 2)
+    {
+        <div class="plan-card">
+            <h3>📈 @T("SystolicTrendTitle")</h3>
+            <TrendChart Values="_systolicTrend" Unit=" mmHg" Color="var(--urgent)" />
+        </div>
+    }
+
+    <div class="form-field">
+        <label>@T("LogVitalsLabel")</label>
+        <div class="form-row">
+            <input type="number" @bind="_vitalsSystolic" placeholder="@T("SystolicPlaceholder")" />
+            <input type="number" @bind="_vitalsDiastolic" placeholder="@T("DiastolicPlaceholder")" />
+            <input type="number" @bind="_vitalsHeartRate" placeholder="@T("HeartRatePlaceholder")" />
+        </div>
+        <div class="form-row">
+            <input type="number" step="0.1" @bind="_vitalsTemperature" placeholder="@T("TempPlaceholder")" />
+            <input type="number" @bind="_vitalsOxygen" placeholder="@T("OxygenPlaceholder")" />
+        </div>
+        <button class="bloom-btn secondary small-btn" @onclick="SaveVitalsAsync" disabled="@_checkingVitals">
+            @(_checkingVitals ? T("CheckingBtn") : T("LogVitalsBtn"))
+        </button>
+        <button class="bloom-btn secondary small-btn" @onclick="SimulateDeviceSyncAsync" disabled="@_checkingVitals" title="@T("SimulateSyncTitle")">
+            🔗 @T("SimulateSyncBtn")
+        </button>
+    </div>
+</div>
+
+@code {
+    private int _userId;
+    private string _userName = "Mama";
+    private int _pregnancyWeek = 20;
+    private string _language = "English";
+
+    private string _doctorNameInput = string.Empty;
+    private string _doctorEmailInput = string.Empty;
+    private bool _doctorSaved;
+
+    private PregnancyVitalsReading? _recentVitals;
+    private List<decimal> _systolicTrend = [];
+    private PregnancyAlert? _activeAlert;
+    private bool _checkingVitals;
+
+    private int? _vitalsSystolic;
+    private int? _vitalsDiastolic;
+    private int? _vitalsHeartRate;
+    private decimal? _vitalsTemperature;
+    private int? _vitalsOxygen;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _userId = await CurrentUser.GetUserIdAsync();
+        var profile = await Db.UserProfiles.AsNoTracking().FirstOrDefaultAsync(p => p.UserId == _userId);
+        _userName = string.IsNullOrWhiteSpace(profile?.Name) ? "Mama" : profile.Name;
+        _pregnancyWeek = profile?.CurrentWeek ?? 20;
+        _language = (profile?.Language ?? AppLanguage.English).ToString();
+        _doctorNameInput = profile?.DoctorName ?? string.Empty;
+        _doctorEmailInput = profile?.DoctorEmail ?? string.Empty;
+
+        _recentVitals = await Db.PregnancyVitalsReadings.AsNoTracking()
+            .Where(v => v.UserId == _userId)
+            .OrderByDescending(v => v.RecordedAt)
+            .FirstOrDefaultAsync();
+        _activeAlert = await Db.PregnancyAlerts.AsNoTracking()
+            .Where(a => a.UserId == _userId && !a.Acknowledged)
+            .OrderByDescending(a => a.TriggeredAt)
+            .FirstOrDefaultAsync();
+        await LoadSystolicTrendAsync();
+    }
+
+    private async Task LoadSystolicTrendAsync()
+    {
+        var recent = await Db.PregnancyVitalsReadings.AsNoTracking()
+            .Where(v => v.UserId == _userId && v.SystolicBp != null)
+            .OrderByDescending(v => v.RecordedAt)
+            .Take(10)
+            .Select(v => v.SystolicBp!.Value)
+            .ToListAsync();
+        recent.Reverse(); // oldest first, so the chart reads left-to-right chronologically
+        _systolicTrend = recent.Select(v => (decimal)v).ToList();
+    }
+
+    private async Task SaveDoctorContactAsync()
+    {
+        var name = string.IsNullOrWhiteSpace(_doctorNameInput) ? null : _doctorNameInput.Trim();
+        var email = string.IsNullOrWhiteSpace(_doctorEmailInput) ? null : _doctorEmailInput.Trim();
+
+        await Db.UserProfiles.Where(p => p.UserId == _userId)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(p => p.DoctorName, name)
+                .SetProperty(p => p.DoctorEmail, email));
+
+        _doctorSaved = true;
+    }
+
+    private async Task SaveVitalsAsync()
+    {
+        var reading = new PregnancyVitalsReading
+        {
+            UserId = _userId,
+            SystolicBp = _vitalsSystolic,
+            DiastolicBp = _vitalsDiastolic,
+            HeartRate = _vitalsHeartRate,
+            TemperatureC = _vitalsTemperature,
+            OxygenSaturation = _vitalsOxygen
+        };
+
+        _vitalsSystolic = null;
+        _vitalsDiastolic = null;
+        _vitalsHeartRate = null;
+        _vitalsTemperature = null;
+        _vitalsOxygen = null;
+
+        await ProcessVitalsReadingAsync(reading);
+    }
+
+    // Stands in for a real device-cloud sync (Omron, Withings, etc.) until
+    // one is actually wired up — see ElderCare.razor's SimulateDeviceSyncAsync
+    // for the same rationale on the elder side.
+    private static readonly Random _deviceRandom = new();
+
+    private async Task SimulateDeviceSyncAsync()
+    {
+        // Weighted toward normal readings, occasionally abnormal — same 75/25
+        // split as the elder page. Only BP is pushed into concerning territory,
+        // spanning both the Warning and Critical pre-eclampsia thresholds, so
+        // the "device already caught something" story is demoable either way.
+        var abnormal = _deviceRandom.NextDouble() < 0.25;
+        var reading = new PregnancyVitalsReading
+        {
+            UserId = _userId,
+            SystolicBp = abnormal ? _deviceRandom.Next(145, 179) : _deviceRandom.Next(105, 129),
+            DiastolicBp = abnormal ? _deviceRandom.Next(92, 119) : _deviceRandom.Next(65, 83),
+            HeartRate = _deviceRandom.Next(70, 96),
+            TemperatureC = 36.8m + (decimal)(_deviceRandom.NextDouble() * 0.8 - 0.4),
+            OxygenSaturation = _deviceRandom.Next(95, 100),
+            Source = "Omron Evolv (simulated)"
+        };
+
+        await ProcessVitalsReadingAsync(reading);
+    }
+
+    private async Task ProcessVitalsReadingAsync(PregnancyVitalsReading reading)
+    {
+        // Pre-check locally purely to decide whether to show the spinner
+        // while the real (authoritative) check runs inside
+        // PregnancyVitalsIngestService — see VitalsIngestService's identical
+        // comment (elder) for why checking twice is fine here.
+        var willConcern = PregnancyVitalsThresholdChecker.Check(reading).Count > 0;
+        if (willConcern)
+        {
+            _checkingVitals = true;
+            StateHasChanged();
+        }
+
+        var language = Enum.TryParse<AppLanguage>(_language, out var lang) ? lang : AppLanguage.English;
+        // Uses the live (possibly unsaved) doctor-contact form fields, same
+        // as before extraction — not necessarily what's persisted on
+        // UserProfile if the user hasn't hit Save yet.
+        var result = await VitalsIngest.IngestAsync(
+            _userId, _userName, _pregnancyWeek, reading, language,
+            _doctorNameInput.Length > 0 ? _doctorNameInput : null,
+            string.IsNullOrWhiteSpace(_doctorEmailInput) ? null : _doctorEmailInput);
+
+        await LoadSystolicTrendAsync();
+        _recentVitals = reading;
+        if (result.AlertRaised)
+        {
+            _activeAlert = result.Alert;
+        }
+        _checkingVitals = false;
+    }
+
+    private async Task AcknowledgeAlertAsync()
+    {
+        if (_activeAlert == null) return;
+        var alert = await Db.PregnancyAlerts.FindAsync(_activeAlert.Id);
+        if (alert != null)
+        {
+            alert.Acknowledged = true;
+            await Db.SaveChangesAsync();
+        }
+        _activeAlert = null;
+    }
+
+    private string BuildVitalsSummary(PregnancyVitalsReading v)
+    {
+        var parts = new List<string>();
+        if (v.SystolicBp.HasValue && v.DiastolicBp.HasValue) parts.Add($"BP {v.SystolicBp}/{v.DiastolicBp}");
+        if (v.HeartRate.HasValue) parts.Add($"HR {v.HeartRate} bpm");
+        if (v.TemperatureC.HasValue) parts.Add($"Temp {v.TemperatureC}°C");
+        if (v.OxygenSaturation.HasValue) parts.Add($"O2 {v.OxygenSaturation}%");
+        return parts.Count > 0 ? string.Join(", ", parts) : T("NoReadingsLogged");
+    }
+
+    private string FormatAgo(DateTime recordedAt)
+    {
+        var span = DateTime.UtcNow - recordedAt;
+        if (span.TotalMinutes < 60) return $"{(int)span.TotalMinutes}{T("MinAgo")}";
+        if (span.TotalHours < 24) return $"{(int)span.TotalHours}{T("HourAgo")}";
+        return $"{(int)span.TotalDays}{T("DayAgo")}";
+    }
+
+    private static readonly Dictionary<string, Dictionary<string, string>> Strings = new()
+    {
+        ["English"] = new()
+        {
+            ["Title"] = "Vitals",
+            ["Subtitle"] = "Log your blood pressure and other vitals — a dangerous reading gets flagged by a fixed check, not a guess, and explained to you in plain language.",
+            ["SendSosBtn"] = "Send SOS about this",
+            ["SeenThisBtn"] = "I've seen this",
+            ["DoctorSectionTitle"] = "Doctor for critical alerts",
+            ["DoctorSectionHint"] = "If something Critical is flagged, Janani emails your doctor automatically — no setup needed.",
+            ["DoctorNamePlaceholder"] = "Doctor's name",
+            ["DoctorEmailPlaceholder"] = "Doctor's email",
+            ["Save"] = "Save",
+            ["Saved"] = "Saved",
+            ["LastVitalsTitle"] = "Last recorded vitals",
+            ["LoggedManually"] = "Logged manually",
+            ["SyncedFromTemplate"] = "Synced from {0}",
+            ["SystolicTrendTitle"] = "Systolic BP trend",
+            ["LogVitalsLabel"] = "Log new vitals",
+            ["SystolicPlaceholder"] = "Systolic BP",
+            ["DiastolicPlaceholder"] = "Diastolic BP",
+            ["HeartRatePlaceholder"] = "Heart rate",
+            ["TempPlaceholder"] = "Temp (°C)",
+            ["OxygenPlaceholder"] = "O2 saturation %",
+            ["CheckingBtn"] = "Checking...",
+            ["LogVitalsBtn"] = "Log vitals",
+            ["SimulateSyncBtn"] = "Simulate device sync",
+            ["SimulateSyncTitle"] = "Stands in for a real connected BP monitor until one is wired up",
+            ["PushTitle"] = "Your vitals need attention",
+            ["NoReadingsLogged"] = "No readings logged",
+            ["MinAgo"] = " min ago",
+            ["HourAgo"] = "h ago",
+            ["DayAgo"] = "d ago",
+        },
+        ["Hindi"] = new()
+        {
+            ["Title"] = "वाइटल्स",
+            ["Subtitle"] = "अपना ब्लड प्रेशर और अन्य वाइटल्स दर्ज करें — किसी खतरनाक रीडिंग को अंदाज़े से नहीं, एक तय जांच से चिह्नित किया जाता है, और आपको सरल भाषा में समझाया जाता है।",
+            ["SendSosBtn"] = "इसके बारे में SOS भेजें",
+            ["SeenThisBtn"] = "मैंने इसे देख लिया है",
+            ["DoctorSectionTitle"] = "गंभीर अलर्ट के लिए डॉक्टर",
+            ["DoctorSectionHint"] = "यदि कुछ गंभीर के रूप में चिह्नित होता है, तो जनानी अपने आप आपके डॉक्टर को ईमेल करती है — कोई सेटअप ज़रूरी नहीं।",
+            ["DoctorNamePlaceholder"] = "डॉक्टर का नाम",
+            ["DoctorEmailPlaceholder"] = "डॉक्टर का ईमेल",
+            ["Save"] = "सहेजें",
+            ["Saved"] = "सहेजा गया",
+            ["LastVitalsTitle"] = "आखिरी दर्ज वाइटल्स",
+            ["LoggedManually"] = "मैन्युअल रूप से दर्ज किया गया",
+            ["SyncedFromTemplate"] = "{0} से सिंक किया गया",
+            ["SystolicTrendTitle"] = "सिस्टोलिक बीपी रुझान",
+            ["LogVitalsLabel"] = "नए वाइटल्स दर्ज करें",
+            ["SystolicPlaceholder"] = "सिस्टोलिक बीपी",
+            ["DiastolicPlaceholder"] = "डायस्टोलिक बीपी",
+            ["HeartRatePlaceholder"] = "हृदय गति",
+            ["TempPlaceholder"] = "तापमान (°C)",
+            ["OxygenPlaceholder"] = "O2 सैचुरेशन %",
+            ["CheckingBtn"] = "जांच हो रही है...",
+            ["LogVitalsBtn"] = "वाइटल्स दर्ज करें",
+            ["SimulateSyncBtn"] = "डिवाइस सिंक का अनुकरण करें",
+            ["SimulateSyncTitle"] = "एक असली कनेक्टेड बीपी मॉनिटर के जुड़ने तक इसकी जगह काम करता है",
+            ["PushTitle"] = "आपके वाइटल्स पर ध्यान देने की ज़रूरत है",
+            ["NoReadingsLogged"] = "कोई रीडिंग दर्ज नहीं",
+            ["MinAgo"] = " मिनट पहले",
+            ["HourAgo"] = " घंटे पहले",
+            ["DayAgo"] = " दिन पहले",
+        },
+        ["Telugu"] = new()
+        {
+            ["Title"] = "వైటల్స్",
+            ["Subtitle"] = "మీ రక్తపోటు మరియు ఇతర వైటల్స్ నమోదు చేయండి — ప్రమాదకరమైన రీడింగ్ ఊహ ద్వారా కాకుండా ఒక స్థిర తనిఖీ ద్వారా గుర్తించబడుతుంది, మరియు మీకు సరళమైన భాషలో వివరించబడుతుంది.",
+            ["SendSosBtn"] = "దీని గురించి SOS పంపండి",
+            ["SeenThisBtn"] = "నేను దీన్ని చూశాను",
+            ["DoctorSectionTitle"] = "తీవ్రమైన హెచ్చరికల కోసం డాక్టర్",
+            ["DoctorSectionHint"] = "ఏదైనా తీవ్రమైనదిగా గుర్తించబడితే, జననీ స్వయంచాలకంగా మీ డాక్టర్‌కి ఇమెయిల్ పంపుతుంది — ఎటువంటి సెటప్ అవసరం లేదు.",
+            ["DoctorNamePlaceholder"] = "డాక్టర్ పేరు",
+            ["DoctorEmailPlaceholder"] = "డాక్టర్ ఇమెయిల్",
+            ["Save"] = "సేవ్ చేయండి",
+            ["Saved"] = "సేవ్ చేయబడింది",
+            ["LastVitalsTitle"] = "చివరిగా నమోదు చేసిన వైటల్స్",
+            ["LoggedManually"] = "మాన్యువల్‌గా నమోదు చేయబడింది",
+            ["SyncedFromTemplate"] = "{0} నుండి సింక్ చేయబడింది",
+            ["SystolicTrendTitle"] = "సిస్టోలిక్ బీపీ ధోరణి",
+            ["LogVitalsLabel"] = "కొత్త వైటల్స్ నమోదు చేయండి",
+            ["SystolicPlaceholder"] = "సిస్టోలిక్ బీపీ",
+            ["DiastolicPlaceholder"] = "డయాస్టోలిక్ బీపీ",
+            ["HeartRatePlaceholder"] = "హృదయ స్పందన రేటు",
+            ["TempPlaceholder"] = "ఉష్ణోగ్రత (°C)",
+            ["OxygenPlaceholder"] = "O2 సంతృప్తత %",
+            ["CheckingBtn"] = "తనిఖీ చేస్తోంది...",
+            ["LogVitalsBtn"] = "వైటల్స్ నమోదు చేయండి",
+            ["SimulateSyncBtn"] = "పరికర సింక్‌ను అనుకరించండి",
+            ["SimulateSyncTitle"] = "నిజమైన కనెక్ట్ చేసిన BP మానిటర్ అమర్చే వరకు దీని స్థానంలో పనిచేస్తుంది",
+            ["PushTitle"] = "మీ వైటల్స్‌పై దృష్టి అవసరం",
+            ["NoReadingsLogged"] = "రీడింగ్‌లు నమోదు కాలేదు",
+            ["MinAgo"] = " నిమిషాల క్రితం",
+            ["HourAgo"] = " గంటల క్రితం",
+            ["DayAgo"] = " రోజుల క్రితం",
+        },
+    };
+
+    private string T(string key) =>
+        (Strings.TryGetValue(_language, out var dict) && dict.TryGetValue(key, out var value))
+            ? value
+            : Strings["English"][key];
+}

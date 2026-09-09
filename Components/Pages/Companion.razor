@@ -127,7 +127,10 @@
                 _profile?.Name ?? "Mama",
                 _profile?.CurrentWeek ?? 20,
                 _profile?.Language ?? AppLanguage.English,
-                _profile?.WorkingWomanMode ?? true);
+                _profile?.WorkingWomanMode ?? true,
+                IsBereaved: _profile?.CareContext.IsBereaved ?? false,
+                BirthOutcome: _profile?.CareContext.Outcome?.ToString(),
+                BabyName: _profile?.BabyName);
 
             var sb = new System.Text.StringBuilder();
             var lastRender = DateTime.UtcNow;

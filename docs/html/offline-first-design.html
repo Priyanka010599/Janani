@@ -1,0 +1,493 @@
+<title>Offline-First Before Offline</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Source+Sans+3:ital,wght@0,400;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+:root{
+  --paper:#EEF1F3;
+  --ink:#1B2226;
+  --ink-soft:#55636B;
+  --rule:#D3D9DC;
+  --card:#E3E8EA;
+  --accent:#B23A56;
+  --accent-soft:#F3DEE2;
+  --live:#2E6E5E;
+  --live-bg:#DCEAE3;
+  --planned:#A97327;
+  --planned-bg:#F1E4C9;
+  --designed:#5B5AA6;
+  --designed-bg:#E4E3F3;
+  --code-bg:#E1E6E9;
+  --code-ink:#2C363B;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --paper:#12161A;
+    --ink:#E6EBEE;
+    --ink-soft:#9AA7AD;
+    --rule:#2B3338;
+    --card:#1A2024;
+    --accent:#E38098;
+    --accent-soft:#3A2229;
+    --live:#7FCBB2;
+    --live-bg:#1E332C;
+    --planned:#E0B268;
+    --planned-bg:#3A2F19;
+    --designed:#ADACE0;
+    --designed-bg:#26254A;
+    --code-bg:#171C20;
+    --code-ink:#C9D2D6;
+  }
+}
+:root[data-theme="dark"]{
+  --paper:#12161A;
+  --ink:#E6EBEE;
+  --ink-soft:#9AA7AD;
+  --rule:#2B3338;
+  --card:#1A2024;
+  --accent:#E38098;
+  --accent-soft:#3A2229;
+  --live:#7FCBB2;
+  --live-bg:#1E332C;
+  --planned:#E0B268;
+  --planned-bg:#3A2F19;
+  --designed:#ADACE0;
+  --designed-bg:#26254A;
+  --code-bg:#171C20;
+  --code-ink:#C9D2D6;
+}
+
+*{box-sizing:border-box;}
+body{
+  background:var(--paper);
+  color:var(--ink);
+  font-family:"Source Sans 3", ui-sans-serif, system-ui, sans-serif;
+  font-size:18px;
+  line-height:1.65;
+  padding:0 24px 96px;
+}
+.wrap{max-width:700px; margin:0 auto;}
+
+header.masthead{
+  padding-top:56px;
+  border-bottom:1px solid var(--rule);
+  padding-bottom:32px;
+  margin-bottom:40px;
+}
+.kicker{
+  font-family:"IBM Plex Mono", monospace;
+  font-size:12.5px;
+  letter-spacing:0.09em;
+  text-transform:uppercase;
+  color:var(--accent);
+  margin-bottom:18px;
+}
+h1{
+  font-family:"Fraunces", Georgia, serif;
+  font-optical-sizing:auto;
+  font-weight:600;
+  font-size:2.6rem;
+  line-height:1.12;
+  text-wrap:balance;
+  margin:0 0 14px;
+  letter-spacing:-0.01em;
+}
+.subhead{
+  font-family:"Fraunces", Georgia, serif;
+  font-style:italic;
+  font-weight:400;
+  font-size:1.25rem;
+  color:var(--ink-soft);
+  text-wrap:balance;
+  margin:0;
+}
+.byline{
+  margin-top:22px;
+  font-family:"IBM Plex Mono", monospace;
+  font-size:13px;
+  color:var(--ink-soft);
+  display:flex; gap:16px; flex-wrap:wrap; align-items:center;
+}
+.byline .dot{opacity:0.5;}
+
+.legend{
+  display:flex; gap:10px; flex-wrap:wrap;
+  margin:28px 0 44px;
+}
+.pill{
+  font-family:"IBM Plex Mono", monospace;
+  font-size:11.5px;
+  letter-spacing:0.06em;
+  text-transform:uppercase;
+  padding:4px 10px 5px;
+  border-radius:100px;
+  font-weight:500;
+  white-space:nowrap;
+}
+.pill.live{background:var(--live-bg); color:var(--live);}
+.pill.planned{background:var(--planned-bg); color:var(--planned);}
+.pill.designed{background:var(--designed-bg); color:var(--designed);}
+
+article p{margin:0 0 22px;}
+article > p:first-of-type{
+  font-size:1.08rem;
+}
+
+h2{
+  font-family:"Fraunces", Georgia, serif;
+  font-weight:600;
+  font-size:1.55rem;
+  line-height:1.25;
+  text-wrap:balance;
+  margin:52px 0 8px;
+  display:flex;
+  align-items:baseline;
+  gap:12px;
+  flex-wrap:wrap;
+}
+h2 .pill{position:relative; top:-2px;}
+
+h3{
+  font-family:"Fraunces", Georgia, serif;
+  font-weight:600;
+  font-size:1.18rem;
+  margin:36px 0 6px;
+  display:flex;
+  align-items:baseline;
+  gap:10px;
+  flex-wrap:wrap;
+}
+
+.section-note{
+  color:var(--ink-soft);
+  font-size:0.95rem;
+  margin:0 0 20px;
+}
+
+strong{font-weight:700;}
+em{font-style:italic;}
+
+a{color:var(--accent);}
+
+ul, ol{padding-left:1.3em; margin:0 0 22px;}
+li{margin-bottom:8px;}
+
+code{
+  font-family:"IBM Plex Mono", monospace;
+  font-size:0.86em;
+  background:var(--code-bg);
+  color:var(--code-ink);
+  padding:0.12em 0.4em;
+  border-radius:4px;
+}
+
+pre{
+  background:var(--code-bg);
+  border:1px solid var(--rule);
+  border-radius:10px;
+  padding:18px 20px;
+  overflow-x:auto;
+  margin:0 0 26px;
+}
+pre code{
+  background:none;
+  padding:0;
+  font-size:14px;
+  line-height:1.6;
+  color:var(--code-ink);
+  white-space:pre;
+}
+
+.stack-list{
+  list-style:none;
+  padding:0;
+  margin:0 0 22px;
+  border:1px solid var(--rule);
+  border-radius:10px;
+  overflow:hidden;
+}
+.stack-list li{
+  margin:0;
+  padding:14px 18px;
+  background:var(--card);
+}
+.stack-list li + li{border-top:1px solid var(--rule);}
+.stack-list .name{
+  font-family:"IBM Plex Mono", monospace;
+  font-weight:500;
+  color:var(--ink);
+  display:block;
+  margin-bottom:4px;
+  font-size:0.92rem;
+}
+.stack-list .desc{color:var(--ink-soft); font-size:0.95rem;}
+
+blockquote.takeaway{
+  margin:56px 0 44px;
+  background:var(--accent-soft);
+  border-left:4px solid var(--accent);
+  border-radius:0 10px 10px 0;
+  padding:22px 26px;
+}
+blockquote.takeaway p{
+  margin:0;
+  font-size:1.02rem;
+  line-height:1.6;
+}
+blockquote.takeaway .label{
+  font-family:"IBM Plex Mono", monospace;
+  font-size:11.5px;
+  letter-spacing:0.08em;
+  text-transform:uppercase;
+  color:var(--accent);
+  display:block;
+  margin-bottom:10px;
+}
+
+.gap-callout{
+  border:1px dashed var(--accent);
+  background:var(--accent-soft);
+  border-radius:10px;
+  padding:16px 20px;
+  margin:0 0 22px;
+  font-size:0.96rem;
+}
+.gap-callout strong{color:var(--accent);}
+
+hr.div{
+  border:none;
+  border-top:1px solid var(--rule);
+  margin:56px 0 32px;
+}
+
+footer{
+  font-size:0.95rem;
+  color:var(--ink-soft);
+  font-style:italic;
+}
+footer a{color:var(--accent); font-style:normal;}
+
+@media (max-width:600px){
+  body{font-size:16.5px; padding:0 18px 72px;}
+  h1{font-size:2.05rem;}
+  header.masthead{padding-top:36px;}
+}
+</style>
+
+<div class="wrap">
+
+<header class="masthead">
+  <div class="kicker">Architecture &amp; Design · Janani / Bloom Companion</div>
+  <h1>Designing for Offline-First Health Data Before You Have the Hardware</h1>
+  <p class="subhead">Deterministic safety checks meet seed-data-driven AI</p>
+  <div class="byline">
+    <span>Priyanka Chenna</span>
+    <span class="dot">·</span>
+    <span>Google Cloud Patchamomma program</span>
+    <span class="dot">·</span>
+    <span>~9 min read</span>
+  </div>
+</header>
+
+<article>
+
+<p>Most health-tech AI demos I come across start the same way: a sensor is already streaming, and the interesting part of the write-up is the model. I built Bloom Companion, the caregiving module inside my family health app Janani, in the opposite order. I designed and shipped the deterministic safety-check pipeline and the LLM narration layer <em>first</em>, running entirely on realistic seed data — specifically so the architecture would already be connectivity-agnostic and hardware-agnostic by the time a real edge sensor is ready to plug in. This is a post about that design discipline, not a "here's my live sensor" post. If you're expecting a hardware teardown, you won't find one here — what you'll find is the argument for why the wiring underneath should be built before the wire exists.</p>
+
+<div class="legend">
+  <span class="pill live">Live today</span>
+  <span class="pill planned">Planned hardware</span>
+  <span class="pill designed">Designed for, not built</span>
+</div>
+
+<h2>What Does It Mean to Design "Offline-First" Before You're Offline?</h2>
+
+<p>"Offline-first" usually gets talked about as a runtime property — a device that keeps working without a network, then syncs when it reconnects. But there's a design-time version of that idea that matters just as much, and it's the one I want to talk about here.</p>
+
+<p>The pattern is this: build your data contract and your decision layer assuming a reading could arrive late, out of order, or in a batch — <em>even while every reading right now is actually seeded and simulated.</em> You're not claiming your hardware handles offline sync. You're claiming your code doesn't secretly assume the opposite.</p>
+
+<p>That distinction matters because the failure mode is subtle. It's easy to write a vitals pipeline that quietly assumes "exactly one reading arrives, right now, from a trusted live source." That assumption is invisible while you're feeding it seed data in insertion order. It only surfaces once a real device starts store-and-forwarding three hours of missed readings after a Wi-Fi outage — at which point it's not a bug fix, it's a rewrite of your severity logic, your data model, and possibly your alerting.</p>
+
+<p>So the discipline is: treat "arrival order and timing are not guaranteed" as a constraint on the architecture today, regardless of whether anything is actually arriving out of order today. It's cheap to design for. It's expensive to retrofit.</p>
+
+<h2>Use Case Overview — Bloom Companion (Janani)</h2>
+
+<p>Janani is a family caregiving app built to unify two things that are usually handled by separate apps and separate mental models: maternal and infant health monitoring, and elder-care remote monitoring. In practice, one caregiver is often managing both ends of a household at once — a new mother recovering postpartum with an infant to track, and an aging parent whose vitals need watching from a distance. Bloom Companion is the module that watches vitals for both populations and turns thresholds crossed into something a caregiver can act on, explained in plain language rather than a raw number.</p>
+
+<p>To be direct about where things stand: <strong>today, every vitals reading in Bloom Companion comes from seed data</strong>, exercised through the exact same code paths a real sensor feed would use. There is no live sensor wired into the app. An edge device — I'm planning an ESP32 with a MAX30102 pulse-oximetry sensor, with on-device inference via Qualcomm AI Hub — is a hardware phase I intend to build next. It does not exist in this codebase yet, in any form, not even as a stub endpoint. I'm naming it here as my own roadmap, not as something already scaffolded in the repo, because the "why design this way now" argument only makes sense if you know what's coming.</p>
+
+<h2>Problem</h2>
+
+<p>Given that framing, the architecture has to satisfy three constraints <em>before</em> real hardware exists — not as future-proofing for its own sake, but because getting these wrong now means re-architecting later instead of just swapping a data source.</p>
+
+<p><strong>1. The severity-check logic must be pure and deterministic.</strong> Thresholds go in, a verdict comes out — the same verdict every time, regardless of whether the input came from seed data, a batch upload from an offline device, or a live stream. No code path in the checker should be written as if "always online, always exactly one reading at a time" is a safe assumption, because it's already false in a batch-upload world and it'll be false the day a device buffers readings during a dead zone.</p>
+
+<p><strong>2. The LLM explanation layer must never be the thing making the call.</strong> It narrates a verdict the deterministic checker already produced. That has to hold true regardless of where the reading came from — seed data today, a device tomorrow. If the model's job ever quietly expands from "explain this decision" to "help decide this," you've built a system whose safety behavior depends on prompt behavior, and that's not a trade I'm willing to make in a health context.</p>
+
+<p><strong>3. The data model has to be designed now for out-of-order and batched arrival</strong>, even though nothing arrives out of order today. Timestamps, sync markers, dedup keys — these need to exist in the schema from day one so that swapping seed data for a real store-and-forward edge device later is a <em>data-source change</em>, not a <em>re-architecture</em>.</p>
+
+<h2>How We Do It Today <span class="pill live">Live today</span></h2>
+
+<p>The actual stack, as it exists right now:</p>
+
+<ul class="stack-list">
+  <li><span class="name">janani-app</span><span class="desc">.NET 8, Blazor Server, EF Core against Cloud SQL Postgres 15. Owns the deterministic severity-checker logic; runs it against seeded vitals and events.</span></li>
+  <li><span class="name">janani-agents</span><span class="desc">Python, FastAPI, Google ADK, Gemini 2.5 Flash on Vertex AI. Narrates a verdict the .NET side already computed, in plain language a caregiver can read. Does not compute severity.</span></li>
+</ul>
+
+<p>The seed data isn't arbitrary — it's deliberately shaped like plausible sensor output. Readings carry timestamps and a <code>Source</code> field (currently a free-text string — <code>null</code> for a manually entered reading, or a device-name string like <code>"Withings BPM Connect (simulated)"</code> for a simulated feed) so the checker code is already being exercised the way it will need to behave once a real edge device is integrated, rather than being written against an idealized, order-guaranteed stream.</p>
+
+<h2>Architecture</h2>
+
+<p>Three layers, each marked by what's actually running versus what's designed-for:</p>
+
+<h3><span class="pill live">Live</span> <span class="pill planned">Planned</span> Data source layer</h3>
+<p>Today, a seed data generator (<code>SeedDemoAccount</code> in <code>Program.cs</code>) populates <code>VitalsReading</code> and <code>PregnancyVitalsReading</code> records for elder and maternal/infant profiles respectively. Planned: an ESP32 + MAX30102 edge sensor, with on-device inference via Qualcomm AI Hub — not yet built, named here as intent, not existing scaffolding.</p>
+
+<h3><span class="pill live">Live today</span> Deterministic checker layer — source-agnostic by design</h3>
+<p><code>Services/VitalsThresholdChecker.cs</code> is a pure static class. It takes a <code>VitalsReading</code> and returns a list of <code>Concern</code> objects based on threshold checks — systolic/diastolic blood pressure, heart rate, temperature, SpO2. It has no knowledge of where the reading came from, no network call, no LLM call. Sibling checkers (<code>PregnancyVitalsThresholdChecker</code>, <code>GrowthThresholdChecker</code>, <code>PostpartumRecoveryChecker</code>, <code>EpdsScreeningChecker</code>) follow the same shape for their respective domains.</p>
+
+<h3><span class="pill live">Live today</span> Cloud layer</h3>
+<p>Cloud SQL Postgres 15 for storage; a <code>janani-alert-events</code> Pub/Sub topic that fans out to FCM push notifications, with a direct-FCM fallback path so a Pub/Sub outage never means a critical alert is silently dropped; Gemini narration via Vertex AI, called only after the checker layer has already produced a verdict.</p>
+
+<h2>Step-by-Step Implementation Guide</h2>
+
+<h3><span class="pill live">Live today</span> Step 1 — The seed data shape</h3>
+
+<p>The actual model, from <code>Models/Models.cs</code>, is C#/PascalCase — not the snake_case shape you might expect from a device-facing schema, but the fields that matter for source-agnostic design are already there:</p>
+
+<pre><code>public class VitalsReading
+{
+    public int Id { get; set; }
+    public int ElderProfileId { get; set; }
+    public DateTime RecordedAt { get; set; }
+    public int? SystolicBp { get; set; }
+    public int? DiastolicBp { get; set; }
+    public int? HeartRate { get; set; }
+    public decimal? TemperatureC { get; set; }
+    public decimal? OxygenSaturation { get; set; }
+    public string? Notes { get; set; }
+    public string? Source { get; set; }   // null = manual entry,
+                                           // or a device name string,
+                                           // e.g. "Withings BPM Connect (simulated)"
+}</code></pre>
+
+<p><code>Source</code> today is a loose, human-readable string rather than a clean enum — that's a gap I'd want to tighten (e.g. a <code>SourceType</code> of <code>Manual</code> / <code>SimulatedDevice</code> / <code>EdgeDevice</code>) before a real device is wired in, so ingestion code can branch on it reliably rather than string-matching.</p>
+
+<h3><span class="pill live">Live today</span> Step 2 — The deterministic severity-check function</h3>
+
+<p><code>Services/VitalsThresholdChecker.cs</code> takes the record shape, not a live API call — it doesn't care whether the record came from seed data or a device:</p>
+
+<pre><code>public static class VitalsThresholdChecker
+{
+    public static List&lt;Concern&gt; Check(VitalsReading v)
+    {
+        var concerns = new List&lt;Concern&gt;();
+
+        if (v.SystolicBp is &lt; 90 or &gt; 180)
+            concerns.Add(new Concern(Severity.Critical, "Systolic BP out of safe range"));
+
+        if (v.DiastolicBp is &lt; 60 or &gt; 120)
+            concerns.Add(new Concern(Severity.Critical, "Diastolic BP out of safe range"));
+
+        if (v.HeartRate is &lt; 50 or &gt; 120)
+            concerns.Add(new Concern(Severity.Warning, "Heart rate out of typical range"));
+
+        if (v.TemperatureC is &lt; 35.0m or &gt; 38.5m)
+            concerns.Add(new Concern(Severity.Warning, "Temperature out of typical range"));
+
+        if (v.OxygenSaturation is &lt; 92)
+            concerns.Add(new Concern(Severity.Critical, "SpO2 below safe threshold"));
+
+        return concerns;
+        // Note: thresholds are a starting point for triage, not medical guidance.
+    }
+}</code></pre>
+
+<p>This is the piece that makes the "source-agnostic by design" claim real rather than aspirational: it's a pure function over a record. Feed it a seeded row, a batch-uploaded row, or a live-streamed row, and it behaves identically, because it has no opinion about arrival.</p>
+
+<h3><span class="pill live">Live today</span> <span class="pill designed">Ordering: designed for, not built</span> Step 3 — Handling out-of-order/batched records</h3>
+
+<p>This section has moved since I first wrote it. Dedup is now real, backed at both the application and database layer. A new <code>Services/VitalsIngestService.cs</code> checks a client-generated <code>DeviceReadingId</code> against existing rows before insert, and a partial unique index enforces the same rule at the database:</p>
+
+<pre><code>// Services/VitalsIngestService.cs
+if (!string.IsNullOrEmpty(reading.DeviceReadingId) &&
+    await db.VitalsReadings.AsNoTracking()
+        .AnyAsync(v =&gt; v.DeviceReadingId == reading.DeviceReadingId, ct))
+{
+    return new VitalsIngestResult(Duplicate: true, AlertRaised: false, Severity: null, Alert: null);
+}
+</code></pre>
+
+<pre><code>-- Program.cs — partial index, so it never conflicts with
+-- the many manually entered readings that have no DeviceReadingId
+CREATE UNIQUE INDEX IF NOT EXISTS "IX_VitalsReadings_DeviceReadingId"
+ON "VitalsReadings" ("DeviceReadingId")
+WHERE "DeviceReadingId" IS NOT NULL;</code></pre>
+
+<div class="gap-callout"><strong>Honest gap that remains:</strong> this closes the "retried duplicate upload" case, but not full out-of-order handling. The ingest endpoint still assumes a device flushes its buffer in capture order once it reconnects — there's no server-side timestamp-reordering yet. That's still designed-for, not built.</div>
+
+<p>The part of the original design bet that did pay off: none of this touched the checker from Step 2. Dedup happens entirely before <code>VitalsThresholdChecker.Check()</code> is ever called — the checker still takes one record at a time and has no idea a duplicate check happened upstream. That separation is exactly why closing this gap didn't require touching the safety logic at all.</p>
+
+<h3><span class="pill live">Live today</span> Step 4 — Pub/Sub → FCM alert dispatch</h3>
+
+<p><code>Services/PushNotificationService.cs</code> publishes to the <code>janani-alert-events</code> Pub/Sub topic, and falls back to a direct FCM v1 call if the publish fails — the comment in the code states the intent plainly: a Pub/Sub outage must never mean an alert is silently dropped.</p>
+
+<pre><code>public async Task NotifyUserViaPubSubAsync(string userId, Alert alert)
+{
+    var published = await _pubSub.PublishAsync("janani-alert-events", alert);
+
+    if (!published)
+    {
+        // Direct-FCM fallback: an infra hiccup upstream of Pub/Sub
+        // must not mean a critical alert never reaches the caregiver.
+        await NotifyUserAsync(userId, alert);
+    }
+}
+
+private async Task NotifyUserAsync(string userId, Alert alert)
+{
+    var url = $"https://fcm.googleapis.com/v1/projects/{_projectId}/messages:send";
+    // ... builds and sends the FCM v1 payload directly
+}</code></pre>
+
+<p>This layer genuinely doesn't care where the reading that triggered the alert came from — it only knows a verdict was produced. That's the hardware-independence I mean when I say this part is already done, not aspirational.</p>
+
+<h3><span class="pill live">Live today</span> Step 5 — Gemini narration</h3>
+
+<p><code>agents/health_monitor_agent/agent.py</code> runs a Google ADK <code>LlmAgent</code> on <code>gemini-2.5-flash</code> via Vertex AI, called from a FastAPI endpoint in <code>agents/main.py</code>. It receives the checker's output — a list of already-formatted concern strings and a severity level — and turns that into caregiver-readable language. It never receives raw vitals and never computes severity itself.</p>
+
+<pre><code>class ExplainRequest(BaseModel):
+    concerns: list[str]
+    severity: str
+
+@app.post("/agents/health-monitor/explain")
+async def explain(req: ExplainRequest):
+    # Narrates a verdict already produced by VitalsThresholdChecker.
+    # Does not re-derive or override the severity.
+    return await health_monitor_agent.run(req.concerns, req.severity)</code></pre>
+
+<div class="gap-callout"><strong>Honest gap:</strong> I'd originally described this narration step to myself as "receiving a short history of records" — that's not accurate today. It receives a single verdict's worth of pre-formatted concerns, not a list of recent readings. Giving the model a short window of history so it can narrate a trend rather than a single crossed threshold is on my list, but it isn't built.</div>
+
+<h3><span class="pill live">Simulator live</span> <span class="pill planned">Real hardware: next milestone</span> Step 6 — What changes when the edge device is integrated</h3>
+
+<p>This is the section that's changed the most. There's now a real <code>edge-device-sim/vitals_edge_simulator.py</code> in the repo — a standalone script whose docstring says exactly what it is: it "simulates the planned ESP32 + MAX30102 (Qualcomm AI Hub) edge vitals device talking to Bloom Companion / Janani, before any real hardware is wired in." It's still software, not firmware — but it's no longer just a name in a roadmap. It POSTs real readings to the real <code>/api/elders/{id}/vitals</code> and <code>/api/pregnancy/vitals</code> endpoints, runs the same dedup/check/alert pipeline as the seed data and the manual-entry UI, and simulates the offline store-and-forward pattern (buffer while offline, flush in capture order on reconnect, survive a duplicate retry) entirely client-side — exactly as a real ESP32 with local flash storage would need to behave.</p>
+
+<p>When the real device is ready, the intended change is now narrower than it was: swap the simulator's client-side reading generation for actual MAX30102 sensor reads and Qualcomm AI Hub on-device inference, keeping the same request shape and the same <code>DeviceReadingId</code> the simulator already sends. Everything downstream — the checker in Step 2, the Pub/Sub/FCM dispatch in Step 4, the Gemini narration in Step 5 — stays untouched, because none of it was ever written to assume where a reading came from.</p>
+
+<p>That's the bet this whole post is making: if that swap really does stay narrow when I get there, the design discipline paid off. If it doesn't, I'll have learned exactly where the source-agnostic claim was thinner than I thought — and I'd rather find that out now, in writing, than after a device is already in someone's home.</p>
+
+<h2>Closing Reflection</h2>
+
+<p>None of this is impressive to look at running — it's seed data producing the same alerts a demo could fake in an afternoon. The value isn't in what it looks like today; it's in what it doesn't need to change tomorrow. Designing the deterministic/narration split, and shaping the data model for out-of-order and batched arrival, before there's any real hardware generating messy data, is what should make the eventual sensor integration a data-source swap instead of a rewrite of the safety logic underneath it.</p>
+
+<blockquote class="takeaway">
+  <span class="label">💡 Key Takeaway</span>
+  <p>Decisions about determinism, ordering, and dedup are cheap to get right before you have real hardware generating messy, late, or batched data — and expensive to retrofit once a device is already in the field depending on the old assumptions. If you're building health-adjacent software and the sensor isn't ready yet, that's not a reason to wait on the architecture. It's the best possible time to get it right.</p>
+</blockquote>
+
+<hr class="div">
+
+<footer>
+  This work is part of my project for Google Cloud's <strong>Patchamomma</strong> program, which supports women professionals building production-grade GCP applications in Data, AI, and Databases. The edge hardware phase — ESP32, MAX30102, and on-device inference via Qualcomm AI Hub — is next on my roadmap. If that's a build you'd want to follow, I'll be writing about it as it happens.
+</footer>
+
+</article>
+</div>
