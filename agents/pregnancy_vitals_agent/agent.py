@@ -17,7 +17,7 @@ from google.adk.agents import LlmAgent
 from google.genai import types as genai_types
 from pydantic import BaseModel
 
-from common.agent_context import build_instruction
+from common.agent_context import EMERGENCY_GUIDANCE, build_instruction
 
 MODEL = os.environ.get("VERTEX_CHAT_DEPLOYMENT", "gemini-2.5-flash")
 
@@ -41,7 +41,7 @@ root_agent = LlmAgent(
     name="pregnancy_vitals_agent",
     model=MODEL,
     description="Explains an already-flagged pregnancy vitals concern in clear, reassuring language.",
-    instruction=build_instruction(CORE_PROMPT),
+    instruction=build_instruction(CORE_PROMPT + EMERGENCY_GUIDANCE),
     output_schema=HealthAlertExplanation,
     generate_content_config=genai_types.GenerateContentConfig(
         temperature=0.4,

@@ -26,6 +26,18 @@ LANGUAGE_INSTRUCTIONS = {
     "Punjabi": "Please respond entirely in Punjabi (ਪੰਜਾਬੀ).",
 }
 
+# Appended to the prompt of every agent that can suggest getting help fast.
+# Without it the model volunteers "call 911" -- its US default -- which is wrong
+# for an app built for India, and it appeared in every Critical alert including
+# the ones emailed to the doctor. Defined once here rather than copied into each
+# agent, so the number cannot drift between them.
+EMERGENCY_GUIDANCE = """
+
+EMERGENCY NUMBERS: Janani is used in India. If you refer to emergency services,
+say 108 (ambulance) or 112 (the all-India emergency number). Never say 911 and
+never name a foreign emergency number or service."""
+
+
 TONE_SUFFIX = """TONE (non-negotiable): Warm, gentle, never prescriptive. Never use "should",
 "must", or "you need to". Always meet her where she is. She is doing something
 extraordinary — honor that in every word."""
