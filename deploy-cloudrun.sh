@@ -142,7 +142,13 @@ fi
 
 # -- 3. GCS Bucket ------------------------------------------------------------
 echo -e "\n[3/10] Ensuring GCS bucket exists..."
-gsutil ls "gs://$BUCKET_NAME" &>/dev/null || gsutil mb -p "$PROJECT_ID" -l "$REGION" "gs://$BUCKET_NAME"
+# gcloud storage, not gsutil: gsutil is a separate Python program that resolves
+# its own interpreter from PATH, and under Git Bash on Windows that lookup fails
+# ("(gsutil) python3.14: command not found") even though gcloud itself works
+# fine. gcloud storage is the supported replacement and runs on the SDK's own
+# bundled Python, so it doesn't depend on what Python happens to be on PATH.
+gcloud storage ls "gs://$BUCKET_NAME" &>/dev/null \
+  || gcloud storage buckets create "gs://$BUCKET_NAME" --project="$PROJECT_ID" --location="$REGION"
 
 # -- 4. Cloud SQL (PostgreSQL) - instance, database, user, connection secret -
 echo -e "\n[4/10] Ensuring Cloud SQL Postgres instance exists (this can take several minutes on first run)..."
