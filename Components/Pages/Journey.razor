@@ -149,6 +149,49 @@
                 recentlyDone.Add(new JourneyItem("🩺", T("VitalsLoggedItem"), FormatAgo(lastPregVitals.RecordedAt), lastPregVitals.RecordedAt, "/vitals", false));
         }
 
+        // Postpartum/HBNC gap flagged by external review: this page covered
+        // pregnancy, elder, and infant, but never postpartum recovery or the
+        // HBNC home-visit schedule, even though both are tracked elsewhere
+        // (RecoveryPlan.razor, PostpartumCheckIn.razor). Added below,
+        // mirroring the pregnancy block's shape.
+        if (profile?.PostpartumDay is { } ppDay)
+        {
+            var lastCheckIn = await Db.PostpartumCheckIns.AsNoTracking()
+                .Where(c => c.UserId == userId)
+                .OrderByDescending(c => c.CheckedAt)
+                .FirstOrDefaultAsync();
+            var ppAlert = await Db.PostpartumAlerts.AsNoTracking()
+                .Where(a => a.UserId == userId && !a.Acknowledged)
+                .OrderByDescending(a => a.TriggeredAt)
+                .FirstOrDefaultAsync();
+            var ppCardClass = ppAlert == null ? "" : ppAlert.Severity == AlertSeverity.Critical ? "is-alert-critical" : "is-alert-warning";
+            var ppStatus = ppAlert != null ? ppAlert.Message
+                : lastCheckIn != null ? $"{T("LastCheckIn")} {FormatAgo(lastCheckIn.CheckedAt)}"
+                : T("NoCheckInYet");
+            stages.Add(new StageCard("🤱", profile.Name, string.Format(T("PostpartumDayFormat"), ppDay),
+                ppStatus, ppAlert != null, ppCardClass, "/postpartum-checkin"));
+
+            if (ppAlert != null)
+                nextUp.Add(new JourneyItem(ppAlert.Severity == AlertSeverity.Critical ? "🚨" : "⚠️", ppAlert.Message,
+                    FormatAgo(ppAlert.TriggeredAt), ppAlert.TriggeredAt, "/postpartum-checkin", ppAlert.Severity == AlertSeverity.Critical));
+
+            if (lastCheckIn != null)
+                recentlyDone.Add(new JourneyItem("📝", T("CheckInLogged"), FormatAgo(lastCheckIn.CheckedAt), lastCheckIn.CheckedAt, "/postpartum-checkin", false));
+
+            var hbncCompletions = (await Db.RecoveryPlanItemCompletions.AsNoTracking()
+                .Where(c => c.UserId == userId)
+                .Select(c => new { c.ItemKey, c.CompletedAt })
+                .ToListAsync()).ToDictionary(c => c.ItemKey, c => c.CompletedAt);
+            var hbncVisits = HbncVisitSchedule.BuildStatus(ppDay, hbncCompletions);
+            foreach (var visit in hbncVisits.Where(v => v.Status is HbncVisitStatus.Overdue or HbncVisitStatus.DueNow))
+                nextUp.Add(new JourneyItem(visit.Status == HbncVisitStatus.Overdue ? "🚨" : "⚠️",
+                    string.Format(T("HbncDayLabel"), visit.Visit.Day),
+                    visit.Status == HbncVisitStatus.Overdue ? T("OverdueLabel") : T("DueNowLabel"),
+                    DateTime.UtcNow, "/recovery-plan", visit.Status == HbncVisitStatus.Overdue));
+            foreach (var visit in hbncVisits.Where(v => v.Status == HbncVisitStatus.Completed && v.CompletedAt.HasValue))
+                recentlyDone.Add(new JourneyItem("🏠", string.Format(T("HbncDayLabel"), visit.Visit.Day), FormatAgo(visit.CompletedAt!.Value), visit.CompletedAt.Value, "/recovery-plan", false));
+        }
+
         var accessibleElderIds = await CareAccess.GetAccessibleElderIdsAsync(userId);
         var elders = await Db.ElderProfiles.AsNoTracking()
             .Where(e => accessibleElderIds.Contains(e.Id))
@@ -278,6 +321,11 @@
             ["MinAgo"] = " min ago",
             ["HourAgo"] = "h ago",
             ["DayAgo"] = "d ago",
+            ["PostpartumDayFormat"] = "Day {0} postpartum",
+            ["CheckInLogged"] = "Check-in logged",
+            ["HbncDayLabel"] = "Day {0} visit",
+            ["OverdueLabel"] = "Overdue",
+            ["DueNowLabel"] = "Due now",
         },
         ["Hindi"] = new()
         {
@@ -308,6 +356,11 @@
             ["MinAgo"] = " मिनट पहले",
             ["HourAgo"] = " घंटे पहले",
             ["DayAgo"] = " दिन पहले",
+            ["PostpartumDayFormat"] = "प्रसवोत्तर दिन {0}",
+            ["CheckInLogged"] = "चेक-इन दर्ज किया गया",
+            ["HbncDayLabel"] = "दिन {0} विज़िट",
+            ["OverdueLabel"] = "अतिदेय",
+            ["DueNowLabel"] = "अभी देय",
         },
         ["Telugu"] = new()
         {
@@ -338,6 +391,11 @@
             ["MinAgo"] = " నిమిషాల క్రితం",
             ["HourAgo"] = " గంటల క్రితం",
             ["DayAgo"] = " రోజుల క్రితం",
+            ["PostpartumDayFormat"] = "ప్రసవానంతర రోజు {0}",
+            ["CheckInLogged"] = "చెక్-ఇన్ నమోదు చేయబడింది",
+            ["HbncDayLabel"] = "రోజు {0} సందర్శన",
+            ["OverdueLabel"] = "మించిపోయింది",
+            ["DueNowLabel"] = "ఇప్పుడు గడువు",
         },
     };
 

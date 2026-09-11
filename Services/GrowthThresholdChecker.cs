@@ -23,6 +23,12 @@ public static class GrowthThresholdChecker
 
         if (latest.WeightKg is { } weight)
         {
+            // TODO-clinical-review: these four bands are wide, hand-picked
+            // sanity ranges (see file header — deliberately not WHO growth
+            // curves), not sourced to a specific guideline or dataset.
+            // Flagging per external review: confirm with a pediatrician
+            // before relying on these as anything more than a gross
+            // data-entry-error / stalled-trend catch.
             var (min, max) = ageWeeks switch
             {
                 <= 4 => (2.0m, 5.5m),

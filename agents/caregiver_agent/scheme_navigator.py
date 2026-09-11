@@ -3,6 +3,15 @@ authoritative or exhaustive. Exact cash amounts vary by state (Low
 Performing vs High Performing states under NHM); always tell the caregiver
 to confirm current figures with their local health facility/ASHA worker
 rather than treating this as final.
+
+CONTENT LAST REVIEWED: 2026-09-10 (this file's own git history is the
+source of truth for when it was last checked against current scheme
+rules — flagged per external review: this content had no currency marker
+at all before. Covers JSY, JSSK, and UIP only; does NOT cover PMJAY
+(Ayushman Bharat), PMMVY maternity benefit, or ICDS/Anganwadi nutrition
+support — those are gaps in scope, not omitted by accident, and would
+need their own vetted content before being added here rather than
+guessed at.
 """
 
 SCHEME_CONTENT = """

@@ -1,6 +1,6 @@
 # Janani 🌸
 
-Most working women aren't caring for just one person. The same woman managing her own pregnancy is often also the one her aging parent calls when something feels off, and the one who'll be up at 3am with a newborn a few months from now. Janani is one app for all of that — built on Google Cloud, with ten specialized Gemini agents doing the talking and a plain, deterministic system doing the deciding.
+Most working women aren't caring for just one person. The same woman managing her own pregnancy is often also the one her aging parent calls when something feels off, and the one who'll be up at 3am with a newborn a few months from now. Janani is one app for all of that — built on Google Cloud, with fourteen specialized Gemini agents doing the talking and a plain, deterministic system doing the deciding.
 
 Built for **Patchamomma 2026**, a Google Cloud program for women professionals building production-grade GCP apps.
 
@@ -22,8 +22,9 @@ Everything else — Cloud SQL, BigQuery, Cloud Storage, Pub/Sub, Secret Manager,
 ## What's actually in here
 
 - **Pregnancy**: a daily mood check-in that becomes an AI-generated plan, a companion to talk to, meal suggestions, a kick counter, water tracking, a birth plan builder, messages to a partner, a journal.
+- **Postpartum**: a daily check-in (pain, bleeding, healing) run through the same deterministic-checker-then-AI-narrates pattern as vitals, a recovery plan, and the HBNC (Home Based Newborn Care — India's official ASHA-worker home-visit protocol) schedule, computed automatically from the real delivery date rather than tracked by hand.
 - **Elder care**: vitals logging that feeds the deterministic alert system, trend charts, sharing across more than one caregiver, a PDF a caregiver can actually hand to a doctor, and **Elder Mode** — a large-text, voice-friendly view built to be handed to the elder themselves, with an AI tutor that only ever answers from a real, curated guide (how to video call, send a photo, use the SOS button) rather than guessing at instructions for an app it's never seen.
 - **Infant care**: growth, feeding, and sleep tracking, the India UIP vaccination schedule, the same alerting and sharing model as elder care.
-- **Everywhere else**: an SOS/emergency flow, medicine reminders with a lookup grounded in live Google Search, recipes you can browse or just ask for like you'd ask the companion, government scheme info, appointments, a public landing page for anyone visiting before they log in, and a seeded demo account so a reviewer isn't looking at an empty shell.
+- **Everywhere else**: an SOS/emergency flow, medicine reminders with a lookup grounded in live Google Search, recipes you can browse or just ask for like you'd ask the companion, **Family Care** — one AI agent that answers a single question spanning whichever roles apply to her at once (pregnancy, elder, infant), including government entitlement lookups — government scheme info, appointments, a public landing page for anyone visiting before they log in, and a seeded demo account so a reviewer isn't looking at an empty shell.
 - **Language**: 15 supported. English, Hindi, and Telugu are fully localized — the app's own UI text, not just what the AI says back to you. The rest cover AI-generated responses for now.
 
