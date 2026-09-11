@@ -14,10 +14,26 @@ We tried to hold the rest of the app to the same standard: reading recommendatio
 
 Two Cloud Run services that don't fully trust each other:
 
-- **`janani-app`** — .NET 8 / Blazor Server. This is where all the data lives, where every safety check actually runs, and everything the user sees gets rendered. It's the web app, the installable PWA, and what the native Android app loads live (the mobile app doesn't bundle its own copy — it's a thin native shell pointed at this service).
-- **`janani-agents`** — Python / FastAPI, built on Google's Agent Development Kit, talking to Gemini through Vertex AI. It never touches the database directly and never decides anything safety-related — it receives context that's already been assembled, and returns text or structured JSON. It's also locked down (`--no-allow-unauthenticated`), reachable only by `janani-app`'s own service account, not the open internet.
+- **`janani-app`** — .NET 8 / Blazor Server. This is where all the data lives, where every safety check actually runs, and everything the user sees gets rendered. It's the web app, the installable PWA, and what the native Android/iOS app loads live (the mobile app is a thin Capacitor shell pointed at this service — it doesn't bundle its own copy).
+- **`janani-agents`** — Python / FastAPI, built on Google's Agent Development Kit, talking to Gemini through Vertex AI. It never touches the database directly (agent sessions live in memory, not a persisted store) and never decides anything safety-related — it receives context that's already been assembled, and returns text or structured JSON. It's also locked down (`--no-allow-unauthenticated`), reachable only by `janani-app`'s own service account via a signed Google ID token, not the open internet.
 
-Everything else — Cloud SQL, BigQuery, Cloud Storage, Pub/Sub, Secret Manager, Firebase Cloud Messaging — is plumbing in service of those two.
+Everything else — Cloud SQL, BigQuery, Cloud Storage, Pub/Sub, Firebase Cloud Messaging, Secret Manager, Vertex AI/ADK, Cloud Build, Artifact Registry — is plumbing in service of those two. See **Technical Architecture** below for exactly how each one is used.
+
+## Technical Architecture
+
+| Google Cloud Service | How Janani uses it |
+|---|---|
+| **Cloud Run** | Two services — `janani-app` (public) and `janani-agents` (private, `--no-allow-unauthenticated`) |
+| **Cloud SQL (PostgreSQL)** | The production database, via Npgsql/EF Core — every profile and every reading |
+| **Cloud Storage** | Journal photos and generated assets, behind private signed URLs |
+| **Secret Manager** | Every credential — database URL, SMTP password, Pub/Sub verification token, Calendar OAuth secret — mounted into each service via `--set-secrets` at deploy time |
+| **BigQuery** | Queried directly by three services: book recommendations, the elder-tutor guide catalog, and the recipe catalog |
+| **Pub/Sub** | Every alert event is published here first; a failed publish falls back to a direct, synchronous send so a broker hiccup can never silence an alert |
+| **Firebase Cloud Messaging** | Delivers the actual push notification, over FCM's HTTP v1 API |
+| **Vertex AI + Agent Development Kit** | Runs all 14 Gemini agents (`GOOGLE_GENAI_USE_VERTEXAI=TRUE`) |
+| **Cloud Build + Artifact Registry** | Builds and hosts the container image for every deploy of both services |
+
+Access between the two Cloud Run services is a signed Google OIDC ID token, not a shared secret — `janani-app` authenticates to `janani-agents` the same way any GCP-to-GCP caller would.
 
 ## What's actually in here
 
@@ -26,5 +42,6 @@ Everything else — Cloud SQL, BigQuery, Cloud Storage, Pub/Sub, Secret Manager,
 - **Elder care**: vitals logging that feeds the deterministic alert system, trend charts, sharing across more than one caregiver, a PDF a caregiver can actually hand to a doctor, and **Elder Mode** — a large-text, voice-friendly view built to be handed to the elder themselves, with an AI tutor that only ever answers from a real, curated guide (how to video call, send a photo, use the SOS button) rather than guessing at instructions for an app it's never seen.
 - **Infant care**: growth, feeding, and sleep tracking, the India UIP vaccination schedule, the same alerting and sharing model as elder care.
 - **Everywhere else**: an SOS/emergency flow, medicine reminders with a lookup grounded in live Google Search, recipes you can browse or just ask for like you'd ask the companion, **Family Care** — one AI agent that answers a single question spanning whichever roles apply to her at once (pregnancy, elder, infant), including government entitlement lookups — government scheme info, appointments, a public landing page for anyone visiting before they log in, and a seeded demo account so a reviewer isn't looking at an empty shell.
+- **Journey**: one consolidated view across every role she's managing — pregnancy, elder care, infant care, and postpartum recovery — showing what's done, what needs attention, and what's next in one place, instead of checking each section separately.
 - **Language**: 15 supported. English, Hindi, and Telugu are fully localized — the app's own UI text, not just what the AI says back to you. The rest cover AI-generated responses for now.
 
