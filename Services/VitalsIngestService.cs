@@ -116,7 +116,43 @@ public class VitalsIngestService(
             // AppDbContext, which is disposed once the response completes)
             // since this outlives the request that triggered it.
             SendDoctorAlertInBackground(elder.Id, elder.Name, elder.DoctorEmail!, elder.DoctorName, subject, body, caregiverIds);
+
+            // Critical only: email every caregiver too, alongside their push
+            // — same redundant-channel principle as the doctor's own email/
+            // push-fallback pair, so a missed or delayed push notification
+            // isn't the only way a caregiver finds out. Reuses
+            // SendDoctorAlertAsync directly rather than adding a new
+            // interface method: its content is already generic (no
+            // doctor-specific wording), and this keeps the change to one
+            // file instead of both IEmailNotificationService implementations.
+            SendCaregiverAlertEmailsInBackground(caregiverIds, subject, body);
         }
+    }
+
+    private void SendCaregiverAlertEmailsInBackground(IReadOnlyList<int> caregiverIds, string subject, string body)
+    {
+        _ = Task.Run(async () =>
+        {
+            using var scope = scopeFactory.CreateScope();
+            var scopedDb = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var scopedEmail = scope.ServiceProvider.GetRequiredService<IEmailNotificationService>();
+            var caregivers = await scopedDb.Users.AsNoTracking()
+                .Where(u => caregiverIds.Contains(u.Id))
+                .Select(u => new { u.Email, u.Username })
+                .ToListAsync();
+            foreach (var caregiver in caregivers)
+            {
+                if (string.IsNullOrWhiteSpace(caregiver.Email)) continue;
+                try
+                {
+                    await scopedEmail.SendDoctorAlertAsync(caregiver.Email, caregiver.Username, subject, body, CancellationToken.None);
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(ex, "Caregiver alert email failed (to {Email})", caregiver.Email);
+                }
+            }
+        });
     }
 
     private void SendDoctorAlertInBackground(int elderId, string elderName, string doctorEmail, string? doctorName, string subject, string body, IReadOnlyList<int> caregiverIds)

@@ -116,7 +116,36 @@ public class PregnancyVitalsIngestService(
             // AppDbContext, which is disposed once the response completes)
             // since this outlives the request that triggered it.
             SendDoctorAlertInBackground(userId, doctorEmail!, doctorLabel, subject, body);
+
+            // Critical only: email her too, alongside the push — same
+            // redundant-channel principle as the doctor's own email/push-
+            // fallback pair. No caregiver fan-out here (pregnancy is one
+            // user, one push), so this is just her own account email.
+            SendSelfAlertEmailInBackground(userId, subject, body);
         }
+    }
+
+    private void SendSelfAlertEmailInBackground(int userId, string subject, string body)
+    {
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                using var scope = scopeFactory.CreateScope();
+                var scopedDb = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+                var scopedEmail = scope.ServiceProvider.GetRequiredService<IEmailNotificationService>();
+                var user = await scopedDb.Users.AsNoTracking()
+                    .Where(u => u.Id == userId)
+                    .Select(u => new { u.Email, u.Username })
+                    .FirstOrDefaultAsync();
+                if (user != null && !string.IsNullOrWhiteSpace(user.Email))
+                    await scopedEmail.SendDoctorAlertAsync(user.Email, user.Username, subject, body, CancellationToken.None);
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Self alert email failed for user {UserId}", userId);
+            }
+        });
     }
 
     private void SendDoctorAlertInBackground(int userId, string doctorEmail, string doctorLabel, string subject, string body)

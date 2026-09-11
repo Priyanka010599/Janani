@@ -142,6 +142,16 @@ public class PostpartumCheckInService(
                     $"The automatic alert email to {doctorLabel} failed to send — please contact them directly.",
                     "postpartum-checker", NotificationScope.MaternalSafety, ct: ct);
             }
+
+            // Critical only: email her too, alongside the push — same
+            // redundant-channel principle as the doctor's own email/push-
+            // fallback pair above.
+            var self = await db.Users.AsNoTracking()
+                .Where(u => u.Id == alert.UserId)
+                .Select(u => new { u.Email, u.Username })
+                .FirstOrDefaultAsync(ct);
+            if (self != null && !string.IsNullOrWhiteSpace(self.Email))
+                await emailNotifications.SendDoctorAlertAsync(self.Email, self.Username, subject, body, ct);
         }
     }
 }
