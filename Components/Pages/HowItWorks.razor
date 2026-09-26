@@ -1,0 +1,292 @@
+@page "/how-it-works"
+@using Janani.Models
+@using Janani.Services
+@inject BloomAgentRegistry Agents
+@inject UserProfileCache ProfileCache
+@rendermode InteractiveServer
+
+<PageTitle>Janani — How it decides</PageTitle>
+
+@{
+    // Recomputed on every render, on purpose: the whole point of this page is
+    // that the verdict below is a pure function of the numbers above it. No
+    // model call, no I/O -- VitalsThresholdChecker.Check is plain C#.
+    var concerns = VitalsThresholdChecker.Check(BuildReading());
+    var severity = concerns.Any(c => c.Severity == AlertSeverity.Critical) ? AlertSeverity.Critical : AlertSeverity.Warning;
+    var explanationIsCurrent = _explanation != null && _explainedFor == Signature();
+}
+
+<div class="bloom-container guardrail-wide">
+    <div class="section-header">
+        <h1><Icon Name="vitals"/> @T("Title")</h1>
+        <p class="subtitle">@T("Subtitle")</p>
+    </div>
+
+    <p class="data-source-note">@T("SampleNote")</p>
+
+    <div class="guardrail-steps">
+
+        <div class="plan-card guardrail-step">
+            <h3>@T("Step1")</h3>
+            <div class="guardrail-presets">
+                <button class="bloom-btn secondary small-btn" @onclick="() => Preset(122, 78, 72, 36.8m, 97)">@T("PresetNormal")</button>
+                <button class="bloom-btn secondary small-btn" @onclick="() => Preset(128, 80, 132, 36.9m, 96)">@T("PresetWarning")</button>
+                <button class="bloom-btn secondary small-btn" @onclick="() => Preset(192, 104, 140, 39.5m, 85)">@T("PresetCritical")</button>
+            </div>
+            <div class="form-field">
+                <label>@T("Systolic")</label>
+                <input type="number" @bind="_sys" @bind:event="oninput" />
+            </div>
+            <div class="form-field">
+                <label>@T("Diastolic")</label>
+                <input type="number" @bind="_dia" @bind:event="oninput" />
+            </div>
+            <div class="form-field">
+                <label>@T("HeartRate")</label>
+                <input type="number" @bind="_hr" @bind:event="oninput" />
+            </div>
+            <div class="form-field">
+                <label>@T("Temperature")</label>
+                <input type="number" step="0.1" @bind="_temp" @bind:event="oninput" />
+            </div>
+            <div class="form-field">
+                <label>@T("Oxygen")</label>
+                <input type="number" @bind="_spo2" @bind:event="oninput" />
+            </div>
+        </div>
+
+        <div class="plan-card guardrail-step guardrail-checker">
+            <h3>@T("Step2")</h3>
+            <p class="data-source-note">@T("CheckerNote")</p>
+            @if (concerns.Count == 0)
+            {
+                <p class="guardrail-verdict guardrail-ok">@T("NoConcern")</p>
+                <p class="data-source-note">@T("NoConcernHint")</p>
+            }
+            else
+            {
+                <p class="guardrail-verdict @(severity == AlertSeverity.Critical ? "guardrail-critical" : "guardrail-warning")">
+                    @(severity == AlertSeverity.Critical ? T("VerdictCritical") : T("VerdictWarning"))
+                </p>
+                <ul class="guardrail-concerns">
+                    @foreach (var c in concerns)
+                    {
+                        <li>
+                            <span class="guardrail-sev @(c.Severity == AlertSeverity.Critical ? "sev-critical" : "sev-warning")">@(c.Severity == AlertSeverity.Critical ? T("Critical") : T("Warning"))</span>
+                            @c.Description
+                        </li>
+                    }
+                </ul>
+            }
+        </div>
+
+        <div class="plan-card guardrail-step">
+            <h3>@T("Step3")</h3>
+            @if (concerns.Count == 0)
+            {
+                <p class="data-source-note">@T("NothingToExplain")</p>
+            }
+            else
+            {
+                <div class="form-field">
+                    <label>@T("Language")</label>
+                    <select @bind="_lang">
+                        <option value="English">English</option>
+                        <option value="Hindi">हिंदी</option>
+                        <option value="Telugu">తెలుగు</option>
+                    </select>
+                </div>
+                <button class="bloom-btn primary" @onclick="ExplainAsync" disabled="@_busy">
+                    @(_busy ? T("Explaining") : T("Explain"))
+                </button>
+                @if (_error != null)
+                {
+                    <p class="medicine-explanation medicine-explanation-error">@_error</p>
+                }
+                @if (explanationIsCurrent)
+                {
+                    <p class="guardrail-explanation">@_explanation</p>
+                    @if (!string.IsNullOrWhiteSpace(_action))
+                    {
+                        <p class="data-source-note"><strong>@T("SuggestedAction"):</strong> @_action</p>
+                    }
+                }
+            }
+        </div>
+
+    </div>
+
+    <p class="data-source-note guardrail-footer">@T("Footer")</p>
+</div>
+
+@code {
+    private int? _sys = 192, _dia = 104, _hr = 140, _spo2 = 85;
+    private decimal? _temp = 39.5m;
+    private string _lang = "English";
+
+    private string? _explanation;
+    private string? _action;
+    private string? _explainedFor;
+    private string? _error;
+    private bool _busy;
+    private string _uiLanguage = "English";
+
+    // A sample dependent, not a real profile: this page is a demonstration of
+    // the pipeline, so nothing typed here is ever saved or alerted on.
+    private static readonly ElderProfile SampleElder = new() { Name = "Lakshmi", Age = 68, Relation = "Mother" };
+
+    protected override async Task OnInitializedAsync()
+    {
+        var profile = await ProfileCache.GetAsync();
+        _uiLanguage = (profile?.Language ?? AppLanguage.English).ToString();
+        if (_uiLanguage is "English" or "Hindi" or "Telugu") _lang = _uiLanguage;
+    }
+
+    private VitalsReading BuildReading() => new()
+    {
+        SystolicBp = _sys,
+        DiastolicBp = _dia,
+        HeartRate = _hr,
+        TemperatureC = _temp,
+        OxygenSaturation = _spo2
+    };
+
+    private string Signature() => $"{_sys}|{_dia}|{_hr}|{_temp}|{_spo2}|{_lang}";
+
+    private void Preset(int sys, int dia, int hr, decimal temp, int spo2)
+    {
+        (_sys, _dia, _hr, _temp, _spo2) = (sys, dia, hr, temp, spo2);
+        _explanation = null;
+        _error = null;
+    }
+
+    private async Task ExplainAsync()
+    {
+        var concerns = VitalsThresholdChecker.Check(BuildReading());
+        // The gate the page exists to demonstrate: no concern, no model call.
+        if (concerns.Count == 0) return;
+
+        var severity = concerns.Any(c => c.Severity == AlertSeverity.Critical) ? AlertSeverity.Critical : AlertSeverity.Warning;
+        var language = Enum.TryParse<AppLanguage>(_lang, out var parsed) ? parsed : AppLanguage.English;
+
+        _busy = true;
+        _error = null;
+        try
+        {
+            var (explanation, action) = await Agents.HealthMonitor.ExplainAsync(SampleElder, concerns, severity, language);
+            _explanation = explanation;
+            _action = action;
+            _explainedFor = Signature();
+        }
+        catch (Exception)
+        {
+            _error = T("ExplainError");
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private static readonly Dictionary<string, Dictionary<string, string>> Strings = new()
+    {
+        ["English"] = new()
+        {
+            ["Title"] = "How Janani decides",
+            ["Subtitle"] = "Change the reading and watch what happens. Plain code decides whether it's dangerous — the AI is only ever asked to explain.",
+            ["SampleNote"] = "A sample reading for Lakshmi (68). Nothing here is saved and no alert is sent.",
+            ["Step1"] = "1 · The reading",
+            ["Step2"] = "2 · Plain-code safety check",
+            ["Step3"] = "3 · Gemini explains",
+            ["PresetNormal"] = "Normal",
+            ["PresetWarning"] = "Warning",
+            ["PresetCritical"] = "Critical",
+            ["Systolic"] = "Systolic BP (mmHg)",
+            ["Diastolic"] = "Diastolic BP (mmHg)",
+            ["HeartRate"] = "Heart rate (bpm)",
+            ["Temperature"] = "Temperature (°C)",
+            ["Oxygen"] = "Oxygen saturation (%)",
+            ["CheckerNote"] = "VitalsThresholdChecker — deterministic C#. No model is involved in this step.",
+            ["NoConcern"] = "No concern found",
+            ["NoConcernHint"] = "Every value is inside its safe range.",
+            ["VerdictCritical"] = "CRITICAL — flagged by a fixed rule",
+            ["VerdictWarning"] = "WARNING — flagged by a fixed rule",
+            ["Critical"] = "Critical",
+            ["Warning"] = "Warning",
+            ["NothingToExplain"] = "Nothing was flagged, so the AI is never called. It can't raise an alert of its own.",
+            ["Language"] = "Explain in",
+            ["Explain"] = "Explain with Gemini",
+            ["Explaining"] = "Explaining…",
+            ["SuggestedAction"] = "Suggested action",
+            ["ExplainError"] = "The explanation service didn't respond. The verdict above doesn't depend on it — the alert would still fire.",
+            ["Footer"] = "The model can word the alert, but it can't change the verdict. Every threshold cites its clinical source in code.",
+        },
+        ["Hindi"] = new()
+        {
+            ["Title"] = "Janani कैसे तय करता है",
+            ["Subtitle"] = "रीडिंग बदलकर देखें कि क्या होता है। खतरनाक है या नहीं, यह सादा कोड तय करता है — AI से केवल समझाने को कहा जाता है।",
+            ["SampleNote"] = "लक्ष्मी (68) की एक नमूना रीडिंग। यहां कुछ भी सेव नहीं होता और कोई अलर्ट नहीं भेजा जाता।",
+            ["Step1"] = "1 · रीडिंग",
+            ["Step2"] = "2 · सादे कोड से सुरक्षा जांच",
+            ["Step3"] = "3 · Gemini समझाता है",
+            ["PresetNormal"] = "सामान्य",
+            ["PresetWarning"] = "चेतावनी",
+            ["PresetCritical"] = "गंभीर",
+            ["Systolic"] = "सिस्टोलिक बीपी (mmHg)",
+            ["Diastolic"] = "डायस्टोलिक बीपी (mmHg)",
+            ["HeartRate"] = "हृदय गति (bpm)",
+            ["Temperature"] = "तापमान (°C)",
+            ["Oxygen"] = "ऑक्सीजन सैचुरेशन (%)",
+            ["CheckerNote"] = "VitalsThresholdChecker — निर्धारित C# कोड। इस चरण में कोई मॉडल शामिल नहीं है।",
+            ["NoConcern"] = "कोई चिंता नहीं मिली",
+            ["NoConcernHint"] = "हर मान अपनी सुरक्षित सीमा के भीतर है।",
+            ["VerdictCritical"] = "गंभीर — एक तय नियम ने चिह्नित किया",
+            ["VerdictWarning"] = "चेतावनी — एक तय नियम ने चिह्नित किया",
+            ["Critical"] = "गंभीर",
+            ["Warning"] = "चेतावनी",
+            ["NothingToExplain"] = "कुछ भी चिह्नित नहीं हुआ, इसलिए AI को बुलाया ही नहीं जाता। वह अपने आप अलर्ट नहीं बना सकता।",
+            ["Language"] = "इस भाषा में समझाएं",
+            ["Explain"] = "Gemini से समझाएं",
+            ["Explaining"] = "समझा रहा है…",
+            ["SuggestedAction"] = "सुझाया गया कदम",
+            ["ExplainError"] = "व्याख्या सेवा ने जवाब नहीं दिया। ऊपर का निर्णय इस पर निर्भर नहीं है — अलर्ट फिर भी जाएगा।",
+            ["Footer"] = "मॉडल अलर्ट के शब्द चुन सकता है, पर निर्णय नहीं बदल सकता। हर सीमा का चिकित्सकीय स्रोत कोड में दर्ज है।",
+        },
+        ["Telugu"] = new()
+        {
+            ["Title"] = "Janani ఎలా నిర్ణయిస్తుంది",
+            ["Subtitle"] = "రీడింగ్ మార్చి ఏమి జరుగుతుందో చూడండి. ప్రమాదకరమా కాదా అని సాధారణ కోడ్ నిర్ణయిస్తుంది — AI ని కేవలం వివరించమని మాత్రమే అడుగుతారు.",
+            ["SampleNote"] = "లక్ష్మి (68) కోసం ఒక నమూనా రీడింగ్. ఇక్కడ ఏదీ సేవ్ కాదు, ఏ అలర్ట్ పంపబడదు.",
+            ["Step1"] = "1 · రీడింగ్",
+            ["Step2"] = "2 · సాధారణ కోడ్‌తో భద్రతా తనిఖీ",
+            ["Step3"] = "3 · Gemini వివరిస్తుంది",
+            ["PresetNormal"] = "సాధారణం",
+            ["PresetWarning"] = "హెచ్చరిక",
+            ["PresetCritical"] = "తీవ్రం",
+            ["Systolic"] = "సిస్టోలిక్ బీపీ (mmHg)",
+            ["Diastolic"] = "డయాస్టోలిక్ బీపీ (mmHg)",
+            ["HeartRate"] = "హృదయ స్పందన (bpm)",
+            ["Temperature"] = "ఉష్ణోగ్రత (°C)",
+            ["Oxygen"] = "ఆక్సిజన్ సంతృప్తత (%)",
+            ["CheckerNote"] = "VitalsThresholdChecker — నిర్ణీత C# కోడ్. ఈ దశలో ఏ మోడల్ ప్రమేయం లేదు.",
+            ["NoConcern"] = "ఎలాంటి ఆందోళన కనిపించలేదు",
+            ["NoConcernHint"] = "ప్రతి విలువ దాని సురక్షిత పరిధిలోనే ఉంది.",
+            ["VerdictCritical"] = "తీవ్రం — ఒక నిర్ణీత నియమం గుర్తించింది",
+            ["VerdictWarning"] = "హెచ్చరిక — ఒక నిర్ణీత నియమం గుర్తించింది",
+            ["Critical"] = "తీవ్రం",
+            ["Warning"] = "హెచ్చరిక",
+            ["NothingToExplain"] = "ఏదీ గుర్తించబడలేదు, కాబట్టి AI ని పిలవనే పిలవరు. అది స్వయంగా అలర్ట్ సృష్టించలేదు.",
+            ["Language"] = "ఈ భాషలో వివరించండి",
+            ["Explain"] = "Gemini తో వివరించండి",
+            ["Explaining"] = "వివరిస్తోంది…",
+            ["SuggestedAction"] = "సూచించిన చర్య",
+            ["ExplainError"] = "వివరణ సేవ స్పందించలేదు. పైన ఉన్న నిర్ణయం దానిపై ఆధారపడదు — అలర్ట్ అయినా వెళ్తుంది.",
+            ["Footer"] = "మోడల్ అలర్ట్‌ను పదాల్లో చెప్పగలదు, కానీ నిర్ణయాన్ని మార్చలేదు. ప్రతి పరిమితికి వైద్య మూలం కోడ్‌లో ఉంది.",
+        },
+    };
+
+    private string T(string key) =>
+        (Strings.TryGetValue(_uiLanguage, out var dict) && dict.TryGetValue(key, out var value))
+            ? value
+            : Strings["English"][key];
+}

@@ -879,3 +879,20 @@ dialog.privacy-dialog h1 {
     .landing-hero h1 { font-size: 1.7rem; }
     .landing-hero .form-actions { flex-direction: column; align-items: stretch; }
 }
+/* How-it-decides page (HowItWorks.razor): reading -> plain-code verdict -> AI explanation */
+.guardrail-steps { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 0.9rem; align-items: start; margin-top: 0.8rem; }
+.guardrail-step h3 { margin-top: 0; }
+.guardrail-presets { display: flex; gap: 0.4rem; flex-wrap: wrap; margin-bottom: 0.8rem; }
+.guardrail-verdict { font-weight: 700; margin: 0.4rem 0; }
+.guardrail-critical { color: var(--urgent-deep); }
+.guardrail-warning { color: #b7791f; }
+.guardrail-ok { color: var(--sage); }
+.guardrail-concerns { list-style: none; padding: 0; margin: 0.4rem 0 0; }
+.guardrail-concerns li { margin-bottom: 0.5rem; font-size: 0.93rem; }
+.guardrail-checker { border-left: 4px solid var(--rose-deep); }
+.guardrail-explanation { margin-top: 0.8rem; line-height: 1.55; }
+.guardrail-footer { margin-top: 1rem; text-align: center; }
+.bloom-container.guardrail-wide { max-width: 1120px; }
+.guardrail-sev { display: inline-block; min-width: 4.6rem; font-size: 0.78rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; }
+.sev-critical { color: var(--urgent-deep); }
+.sev-warning { color: #b7791f; }
