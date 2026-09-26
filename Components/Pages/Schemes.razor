@@ -1,0 +1,334 @@
+@page "/schemes"
+@using Janani.Models
+@using Janani.Data
+@using Janani.Services
+@using Microsoft.EntityFrameworkCore
+@inject AppDbContext Db
+@inject CurrentUserService CurrentUser
+@inject UserProfileCache ProfileCache
+@inject CareAccessService CareAccess
+@rendermode InteractiveServer
+
+<PageTitle>Janani — Government schemes</PageTitle>
+
+@{
+    // The verdicts are a pure function of the answers above them (SchemeMatcher: plain
+    // code, no model). Recomputed every render, so changing an answer changes them at once.
+    var matches = SchemeMatcher.Match(BuildInput())
+        .OrderBy(m => m.Status)   // Likely, Possible, Unlikely
+        .ToList();
+}
+
+<div class="bloom-container guardrail-wide">
+    <div class="section-header">
+        <h1><Icon Name="family"/> @T("Title")</h1>
+        <p class="subtitle">@T("Subtitle")</p>
+    </div>
+
+    <p class="data-source-note">@T("PrivacyNote")</p>
+
+    <div class="guardrail-steps">
+
+        <div class="plan-card guardrail-step">
+            <h3>@T("AboutYou")</h3>
+
+            <div class="form-field">
+                <label>@T("State")</label>
+                <select @bind="_state">
+                    <option value="">@T("Choose")</option>
+                    @foreach (var s in States)
+                    {
+                        <option value="@s">@s</option>
+                    }
+                </select>
+            </div>
+            <div class="form-field">
+                <label>@T("Area")</label>
+                <select @bind="_area">
+                    <option value="">@T("NotSure")</option>
+                    <option value="rural">@T("Rural")</option>
+                    <option value="urban">@T("Urban")</option>
+                </select>
+            </div>
+            <div class="form-field">
+                <label>@T("Age")</label>
+                <input type="number" @bind="_age" @bind:event="oninput" />
+            </div>
+            <div class="form-field">
+                <label>@T("Children")</label>
+                <select @bind="_births">
+                    <option value="0">0</option>
+                    <option value="1">1</option>
+                    <option value="2">2 @T("OrMore")</option>
+                </select>
+            </div>
+            <div class="form-field">
+                <label>@T("Category")</label>
+                <select @bind="_category">
+                    <option value="">@T("NotSure")</option>
+                    <option value="yes">@T("Yes")</option>
+                    <option value="no">@T("No")</option>
+                </select>
+            </div>
+            <div class="form-field">
+                <label>@T("Govt")</label>
+                <select @bind="_govt">
+                    <option value="">@T("NotSure")</option>
+                    <option value="yes">@T("Yes")</option>
+                    <option value="no">@T("No")</option>
+                </select>
+            </div>
+            <div class="form-field">
+                <label class="scheme-check"><input type="checkbox" @bind="_expecting" /> @T("Expecting")</label>
+                <label class="scheme-check"><input type="checkbox" @bind="_lactating" /> @T("Lactating")</label>
+                <label class="scheme-check"><input type="checkbox" @bind="_infant" /> @T("Infant")</label>
+            </div>
+        </div>
+
+        <div class="guardrail-results">
+            @foreach (var m in matches)
+            {
+                <div class="plan-card scheme-card scheme-@m.Status.ToString().ToLowerInvariant()">
+                    <div class="scheme-head">
+                        <strong>@T("Name_" + m.Scheme)</strong>
+                        <span class="guardrail-sev @StatusClass(m.Status)">@T("Status_" + m.Status)</span>
+                    </div>
+                    <p class="data-source-note">@T("Blurb_" + m.Scheme)</p>
+                    @if (m.AmountRupees is { } amount)
+                    {
+                        <p class="scheme-amount">₹@amount.ToString("N0") @T("Amount_" + m.Scheme)</p>
+                    }
+                    <ul class="guardrail-concerns">
+                        @foreach (var r in m.Reasons)
+                        {
+                            <li>@T("R_" + r)</li>
+                        }
+                    </ul>
+                    @if (m.Status != MatchStatus.Unlikely)
+                    {
+                        <p class="scheme-next"><strong>@T("NextStep"):</strong> @T("Next_" + m.Scheme)</p>
+                    }
+                </div>
+            }
+        </div>
+
+    </div>
+
+    <p class="data-source-note guardrail-footer">@T("Footer") (@SchemeMatcher.AsOf)</p>
+</div>
+
+@code {
+    private static readonly string[] States =
+    [
+        "Andaman and Nicobar Islands", "Andhra Pradesh", "Arunachal Pradesh", "Assam", "Bihar", "Chandigarh",
+        "Chhattisgarh", "Dadra and Nagar Haveli and Daman and Diu", "Delhi", "Goa", "Gujarat", "Haryana",
+        "Himachal Pradesh", "Jammu and Kashmir", "Jharkhand", "Karnataka", "Kerala", "Ladakh", "Lakshadweep",
+        "Madhya Pradesh", "Maharashtra", "Manipur", "Meghalaya", "Mizoram", "Nagaland", "Odisha", "Puducherry",
+        "Punjab", "Rajasthan", "Sikkim", "Tamil Nadu", "Telangana", "Tripura", "Uttar Pradesh", "Uttarakhand",
+        "West Bengal"
+    ];
+
+    private string _state = "";
+    private string _area = "";
+    private string _category = "";
+    private string _govt = "";
+    private int? _age;
+    private int _births;
+    private bool _expecting, _lactating, _infant;
+    private string _language = "English";
+
+    protected override async Task OnInitializedAsync()
+    {
+        var profile = await ProfileCache.GetAsync();
+        _language = (profile?.Language ?? AppLanguage.English).ToString();
+
+        // Prefill only what the app already knows about her; everything else she states herself.
+        _lactating = profile?.PostpartumDay != null;
+        _expecting = (profile?.TracksPregnancy ?? false) && !_lactating;
+
+        var userId = await CurrentUser.GetUserIdAsync();
+        var infantIds = await CareAccess.GetAccessibleInfantIdsAsync(userId);
+        var infants = await Db.InfantProfiles.AsNoTracking().Where(i => infantIds.Contains(i.Id)).ToListAsync();
+        _infant = infants.Any(i => i.AgeInWeeks < 52);
+    }
+
+    private SchemeInput BuildInput() => new(
+        string.IsNullOrEmpty(_state) ? null : _state,
+        _area switch { "rural" => true, "urban" => false, _ => (bool?)null },
+        _age,
+        _expecting, _lactating, _infant,
+        _births,
+        ToBool(_category),
+        ToBool(_govt));
+
+    private static bool? ToBool(string v) => v switch { "yes" => true, "no" => false, _ => null };
+
+    private static string StatusClass(MatchStatus s) => s switch
+    {
+        MatchStatus.Likely => "guardrail-ok",
+        MatchStatus.Possible => "sev-warning",
+        _ => "scheme-muted"
+    };
+
+    private static readonly Dictionary<string, Dictionary<string, string>> Strings = new()
+    {
+        ["English"] = new()
+        {
+            ["Title"] = "Government schemes for you",
+            ["Subtitle"] = "Tell us a little about your situation and we'll show which maternal and newborn schemes you probably qualify for.",
+            ["PrivacyNote"] = "Worked out by fixed rules, not by AI. Nothing you enter here is saved.",
+            ["AboutYou"] = "About you",
+            ["State"] = "Your state / UT", ["Choose"] = "— choose —",
+            ["Area"] = "Where you live", ["Rural"] = "Rural", ["Urban"] = "Urban", ["NotSure"] = "Not sure",
+            ["Age"] = "Your age",
+            ["Children"] = "Children you already have", ["OrMore"] = "or more",
+            ["Category"] = "BPL, SC or ST household?", ["Yes"] = "Yes", ["No"] = "No",
+            ["Govt"] = "Central/state government or PSU employee?",
+            ["Expecting"] = "I'm expecting", ["Lactating"] = "I've recently delivered and am breastfeeding", ["Infant"] = "I have a baby under 1 year",
+            ["Status_Likely"] = "Likely eligible", ["Status_Possible"] = "Might be eligible", ["Status_Unlikely"] = "Probably not",
+            ["NextStep"] = "Next step",
+            ["Name_Pmmvy"] = "PMMVY — Matru Vandana Yojana", ["Name_Jsy"] = "JSY — Janani Suraksha Yojana",
+            ["Name_Jssk"] = "JSSK — Janani Shishu Suraksha Karyakram", ["Name_Uip"] = "UIP — Universal Immunisation Programme",
+            ["Blurb_Pmmvy"] = "Cash support for pregnant and breastfeeding mothers, paid in instalments.",
+            ["Blurb_Jsy"] = "Cash support for delivering in a government or accredited facility.",
+            ["Blurb_Jssk"] = "Free delivery care for mother and newborn at government facilities.",
+            ["Blurb_Uip"] = "Free childhood vaccines at government facilities.",
+            ["Amount_Pmmvy"] = "in total", ["Amount_Jsy"] = "for the mother", ["Amount_Jssk"] = "", ["Amount_Uip"] = "",
+            ["Next_Pmmvy"] = "Ask at your nearest Anganwadi centre or health facility how to register — bring your Aadhaar, bank account details and pregnancy registration papers.",
+            ["Next_Jsy"] = "Plan to deliver at a government or accredited facility and tell your ASHA worker — she helps with the paperwork.",
+            ["Next_Jssk"] = "Deliver at a government facility: delivery, medicines, tests, diet and transport are free.",
+            ["Next_Uip"] = "Vaccines are free at government facilities — the schedule is in Infant Care.",
+            ["R_NotPregnantOrLactating"] = "This scheme is for women who are pregnant or breastfeeding.",
+            ["R_ConfirmAge"] = "Add your age to check the age rule.",
+            ["R_PmmvyAgeBelowMin"] = "The scheme's age band starts at about 18 years 7 months.",
+            ["R_PmmvyAgeAboveMax"] = "The scheme's age band ends at 55.",
+            ["R_PmmvyAgeBorderline"] = "The age band starts at about 18 years 7 months — confirm with your Anganwadi worker.",
+            ["R_PmmvyGovtEmployee"] = "Central or state government and PSU employees are excluded.",
+            ["R_ConfirmEmployment"] = "Government and PSU employees are excluded — tell us if that applies to you.",
+            ["R_PmmvyFirstChild"] = "For a first living child: ₹5,000 in two instalments (₹3,000 after antenatal check-up, ₹2,000 after birth and 14 weeks of immunisation).",
+            ["R_PmmvySecondChildGirlOnly"] = "For a second child the ₹6,000 is paid only if the child is a girl.",
+            ["R_PmmvyThirdOrLater"] = "Only the first two living births are covered.",
+            ["R_ConfirmCategory"] = "Confirm income or category rules with your Anganwadi worker — sources describe them differently.",
+            ["R_ConfirmState"] = "Choose your state — the rules differ between states.",
+            ["R_JsyLowPerformingState"] = "In your state, every woman delivering in a government or accredited facility qualifies, whatever her age or number of children.",
+            ["R_ConfirmRuralUrban"] = "Say whether you live in a rural or urban area to see the amount.",
+            ["R_JsyOtherState"] = "In your state, JSY is for BPL, SC or ST women aged 19+ for the first two living births.",
+            ["R_JsyParityLimit"] = "Only the first two living births are covered in your state.",
+            ["R_JsyAgeBelowMin"] = "In your state the minimum age is 19.",
+            ["R_JsyCategoryRequired"] = "In your state JSY is for BPL, SC or ST households.",
+            ["R_JsyConfirmAmount"] = "Confirm the exact amount with your ASHA worker — it varies by state.",
+            ["R_JsskPublicFacility"] = "Free for anyone delivering at, or bringing a newborn to, a government facility.",
+            ["R_NoPregnancyOrInfant"] = "This is for pregnant women, new mothers and newborns.",
+            ["R_UipFree"] = "Free at government facilities for every child.",
+            ["R_NoInfant"] = "This applies once you have a baby.",
+            ["Footer"] = "Rules change and vary by state. Always confirm with your ASHA or Anganwadi worker before relying on this. Checked against official sources",
+        },
+        ["Hindi"] = new()
+        {
+            ["Title"] = "आपके लिए सरकारी योजनाएं",
+            ["Subtitle"] = "अपनी स्थिति के बारे में थोड़ा बताएं — हम दिखाएंगे कि मातृत्व और नवजात की किन योजनाओं के लिए आप शायद पात्र हैं।",
+            ["PrivacyNote"] = "यह तय नियमों से निकाला गया है, AI से नहीं। यहां जो भरेंगे वह सेव नहीं होता।",
+            ["AboutYou"] = "आपके बारे में",
+            ["State"] = "आपका राज्य / केंद्रशासित प्रदेश", ["Choose"] = "— चुनें —",
+            ["Area"] = "आप कहां रहती हैं", ["Rural"] = "ग्रामीण", ["Urban"] = "शहरी", ["NotSure"] = "पक्का नहीं",
+            ["Age"] = "आपकी उम्र",
+            ["Children"] = "पहले से कितने बच्चे हैं", ["OrMore"] = "या अधिक",
+            ["Category"] = "क्या परिवार BPL, SC या ST है?", ["Yes"] = "हां", ["No"] = "नहीं",
+            ["Govt"] = "क्या आप केंद्र/राज्य सरकार या PSU की कर्मचारी हैं?",
+            ["Expecting"] = "मैं गर्भवती हूं", ["Lactating"] = "मेरी हाल ही में डिलीवरी हुई है और मैं स्तनपान कराती हूं", ["Infant"] = "मेरा बच्चा 1 साल से छोटा है",
+            ["Status_Likely"] = "संभवतः पात्र", ["Status_Possible"] = "पात्र हो सकती हैं", ["Status_Unlikely"] = "शायद नहीं",
+            ["NextStep"] = "अगला कदम",
+            ["Name_Pmmvy"] = "PMMVY — मातृ वंदना योजना", ["Name_Jsy"] = "JSY — जननी सुरक्षा योजना",
+            ["Name_Jssk"] = "JSSK — जननी शिशु सुरक्षा कार्यक्रम", ["Name_Uip"] = "UIP — सार्वभौमिक टीकाकरण कार्यक्रम",
+            ["Blurb_Pmmvy"] = "गर्भवती और स्तनपान कराने वाली माताओं के लिए किस्तों में नकद सहायता।",
+            ["Blurb_Jsy"] = "सरकारी या मान्यता प्राप्त अस्पताल में प्रसव के लिए नकद सहायता।",
+            ["Blurb_Jssk"] = "सरकारी अस्पताल में मां और नवजात की मुफ्त प्रसव देखभाल।",
+            ["Blurb_Uip"] = "सरकारी अस्पतालों में बच्चों के मुफ्त टीके।",
+            ["Amount_Pmmvy"] = "कुल", ["Amount_Jsy"] = "मां के लिए", ["Amount_Jssk"] = "", ["Amount_Uip"] = "",
+            ["Next_Pmmvy"] = "पंजीकरण के बारे में अपने नज़दीकी आंगनवाड़ी केंद्र या स्वास्थ्य केंद्र से पूछें — आधार, बैंक खाता विवरण और गर्भावस्था पंजीकरण के कागज़ ले जाएं।",
+            ["Next_Jsy"] = "सरकारी या मान्यता प्राप्त अस्पताल में प्रसव की योजना बनाएं और अपनी आशा कार्यकर्ता को बताएं — वह कागज़ी काम में मदद करती हैं।",
+            ["Next_Jssk"] = "सरकारी अस्पताल में प्रसव कराएं: प्रसव, दवाइयां, जांच, भोजन और परिवहन मुफ्त हैं।",
+            ["Next_Uip"] = "सरकारी अस्पतालों में टीके मुफ्त हैं — कार्यक्रम शिशु देखभाल में है।",
+            ["R_NotPregnantOrLactating"] = "यह योजना गर्भवती या स्तनपान कराने वाली महिलाओं के लिए है।",
+            ["R_ConfirmAge"] = "उम्र का नियम जांचने के लिए अपनी उम्र भरें।",
+            ["R_PmmvyAgeBelowMin"] = "योजना की आयु सीमा लगभग 18 साल 7 महीने से शुरू होती है।",
+            ["R_PmmvyAgeAboveMax"] = "योजना की आयु सीमा 55 साल पर खत्म होती है।",
+            ["R_PmmvyAgeBorderline"] = "आयु सीमा लगभग 18 साल 7 महीने से शुरू होती है — अपनी आंगनवाड़ी कार्यकर्ता से पक्का करें।",
+            ["R_PmmvyGovtEmployee"] = "केंद्र या राज्य सरकार और PSU के कर्मचारी इसमें शामिल नहीं हैं।",
+            ["R_ConfirmEmployment"] = "सरकारी और PSU कर्मचारी शामिल नहीं हैं — बताएं कि क्या यह आप पर लागू होता है।",
+            ["R_PmmvyFirstChild"] = "पहले जीवित बच्चे के लिए: ₹5,000 दो किस्तों में (प्रसव-पूर्व जांच के बाद ₹3,000, जन्म और 14 हफ्ते के टीकाकरण के बाद ₹2,000)।",
+            ["R_PmmvySecondChildGirlOnly"] = "दूसरे बच्चे के लिए ₹6,000 तभी मिलते हैं जब बच्चा लड़की हो।",
+            ["R_PmmvyThirdOrLater"] = "केवल पहले दो जीवित जन्म शामिल हैं।",
+            ["R_ConfirmCategory"] = "आय या श्रेणी के नियम अपनी आंगनवाड़ी कार्यकर्ता से पक्का करें — स्रोत इन्हें अलग-अलग बताते हैं।",
+            ["R_ConfirmState"] = "अपना राज्य चुनें — राज्यों में नियम अलग हैं।",
+            ["R_JsyLowPerformingState"] = "आपके राज्य में सरकारी या मान्यता प्राप्त अस्पताल में प्रसव कराने वाली हर महिला पात्र है, उम्र या बच्चों की संख्या चाहे जो हो।",
+            ["R_ConfirmRuralUrban"] = "राशि देखने के लिए बताएं कि आप ग्रामीण या शहरी क्षेत्र में रहती हैं।",
+            ["R_JsyOtherState"] = "आपके राज्य में JSY 19+ साल की BPL, SC या ST महिलाओं के लिए है, पहले दो जीवित जन्मों तक।",
+            ["R_JsyParityLimit"] = "आपके राज्य में केवल पहले दो जीवित जन्म शामिल हैं।",
+            ["R_JsyAgeBelowMin"] = "आपके राज्य में न्यूनतम आयु 19 साल है।",
+            ["R_JsyCategoryRequired"] = "आपके राज्य में JSY BPL, SC या ST परिवारों के लिए है।",
+            ["R_JsyConfirmAmount"] = "सही राशि अपनी आशा कार्यकर्ता से पक्का करें — यह राज्य के अनुसार बदलती है।",
+            ["R_JsskPublicFacility"] = "सरकारी अस्पताल में प्रसव कराने वाली या नवजात को लाने वाली हर किसी के लिए मुफ्त।",
+            ["R_NoPregnancyOrInfant"] = "यह गर्भवती महिलाओं, नई माताओं और नवजात के लिए है।",
+            ["R_UipFree"] = "सरकारी अस्पतालों में हर बच्चे के लिए मुफ्त।",
+            ["R_NoInfant"] = "यह तब लागू होता है जब आपके पास बच्चा हो।",
+            ["Footer"] = "नियम बदलते रहते हैं और राज्य के अनुसार अलग होते हैं। इस पर भरोसा करने से पहले अपनी आशा या आंगनवाड़ी कार्यकर्ता से ज़रूर पक्का करें। आधिकारिक स्रोतों से जांचा गया",
+        },
+        ["Telugu"] = new()
+        {
+            ["Title"] = "మీ కోసం ప్రభుత్వ పథకాలు",
+            ["Subtitle"] = "మీ పరిస్థితి గురించి కొంచెం చెప్పండి — మాతృత్వం, నవజాత శిశువుల ఏ పథకాలకు మీరు బహుశా అర్హులో చూపిస్తాం.",
+            ["PrivacyNote"] = "ఇది నిర్ణీత నియమాలతో లెక్కించబడింది, AI తో కాదు. ఇక్కడ మీరు ఇచ్చేది సేవ్ కాదు.",
+            ["AboutYou"] = "మీ గురించి",
+            ["State"] = "మీ రాష్ట్రం / కేంద్రపాలిత ప్రాంతం", ["Choose"] = "— ఎంచుకోండి —",
+            ["Area"] = "మీరు ఎక్కడ ఉంటారు", ["Rural"] = "గ్రామీణ", ["Urban"] = "పట్టణ", ["NotSure"] = "ఖచ్చితంగా తెలియదు",
+            ["Age"] = "మీ వయస్సు",
+            ["Children"] = "ఇప్పటికే ఉన్న పిల్లలు", ["OrMore"] = "లేదా ఎక్కువ",
+            ["Category"] = "కుటుంబం BPL, SC లేదా ST నా?", ["Yes"] = "అవును", ["No"] = "కాదు",
+            ["Govt"] = "మీరు కేంద్ర/రాష్ట్ర ప్రభుత్వ లేదా PSU ఉద్యోగినా?",
+            ["Expecting"] = "నేను గర్భవతిని", ["Lactating"] = "నాకు ఇటీవల ప్రసవం అయింది, పాలిస్తున్నాను", ["Infant"] = "నాకు 1 సంవత్సరం లోపు శిశువు ఉంది",
+            ["Status_Likely"] = "బహుశా అర్హులు", ["Status_Possible"] = "అర్హత ఉండవచ్చు", ["Status_Unlikely"] = "బహుశా కాదు",
+            ["NextStep"] = "తదుపరి అడుగు",
+            ["Name_Pmmvy"] = "PMMVY — మాతృ వందన యోజన", ["Name_Jsy"] = "JSY — జననీ సురక్ష యోజన",
+            ["Name_Jssk"] = "JSSK — జననీ శిశు సురక్ష కార్యక్రమం", ["Name_Uip"] = "UIP — సార్వత్రిక టీకా కార్యక్రమం",
+            ["Blurb_Pmmvy"] = "గర్భిణులు, పాలిచ్చే తల్లులకు విడతలుగా నగదు సహాయం.",
+            ["Blurb_Jsy"] = "ప్రభుత్వ లేదా గుర్తింపు పొందిన ఆసుపత్రిలో ప్రసవానికి నగదు సహాయం.",
+            ["Blurb_Jssk"] = "ప్రభుత్వ ఆసుపత్రుల్లో తల్లి, నవజాత శిశువుకు ఉచిత ప్రసవ సంరక్షణ.",
+            ["Blurb_Uip"] = "ప్రభుత్వ ఆసుపత్రుల్లో పిల్లలకు ఉచిత టీకాలు.",
+            ["Amount_Pmmvy"] = "మొత్తం", ["Amount_Jsy"] = "తల్లికి", ["Amount_Jssk"] = "", ["Amount_Uip"] = "",
+            ["Next_Pmmvy"] = "నమోదు గురించి మీ దగ్గరి అంగన్‌వాడీ కేంద్రం లేదా ఆరోగ్య కేంద్రంలో అడగండి — ఆధార్, బ్యాంక్ ఖాతా వివరాలు, గర్భధారణ నమోదు పత్రాలు తీసుకెళ్లండి.",
+            ["Next_Jsy"] = "ప్రభుత్వ లేదా గుర్తింపు పొందిన ఆసుపత్రిలో ప్రసవానికి ప్లాన్ చేసి మీ ఆశా కార్యకర్తకు చెప్పండి — ఆమె పత్రాల్లో సహాయం చేస్తుంది.",
+            ["Next_Jssk"] = "ప్రభుత్వ ఆసుపత్రిలో ప్రసవించండి: ప్రసవం, మందులు, పరీక్షలు, ఆహారం, రవాణా ఉచితం.",
+            ["Next_Uip"] = "ప్రభుత్వ ఆసుపత్రుల్లో టీకాలు ఉచితం — షెడ్యూల్ శిశు సంరక్షణలో ఉంది.",
+            ["R_NotPregnantOrLactating"] = "ఈ పథకం గర్భిణులు లేదా పాలిచ్చే మహిళల కోసం.",
+            ["R_ConfirmAge"] = "వయో నియమాన్ని తనిఖీ చేయడానికి మీ వయస్సు ఇవ్వండి.",
+            ["R_PmmvyAgeBelowMin"] = "పథకం వయో పరిధి సుమారు 18 సంవత్సరాల 7 నెలలతో మొదలవుతుంది.",
+            ["R_PmmvyAgeAboveMax"] = "పథకం వయో పరిధి 55 వద్ద ముగుస్తుంది.",
+            ["R_PmmvyAgeBorderline"] = "వయో పరిధి సుమారు 18 సంవత్సరాల 7 నెలలతో మొదలవుతుంది — మీ అంగన్‌వాడీ కార్యకర్తతో నిర్ధారించుకోండి.",
+            ["R_PmmvyGovtEmployee"] = "కేంద్ర లేదా రాష్ట్ర ప్రభుత్వ, PSU ఉద్యోగులు ఇందులో లేరు.",
+            ["R_ConfirmEmployment"] = "ప్రభుత్వ, PSU ఉద్యోగులు ఇందులో లేరు — ఇది మీకు వర్తిస్తుందో చెప్పండి.",
+            ["R_PmmvyFirstChild"] = "మొదటి సజీవ బిడ్డకు: ₹5,000 రెండు విడతల్లో (ప్రసవపూర్వ పరీక్ష తర్వాత ₹3,000, జననం, 14 వారాల టీకాల తర్వాత ₹2,000).",
+            ["R_PmmvySecondChildGirlOnly"] = "రెండో బిడ్డకు ₹6,000 ఆ బిడ్డ ఆడపిల్ల అయితేనే ఇస్తారు.",
+            ["R_PmmvyThirdOrLater"] = "మొదటి రెండు సజీవ జననాలు మాత్రమే వర్తిస్తాయి.",
+            ["R_ConfirmCategory"] = "ఆదాయ లేదా వర్గ నియమాలను మీ అంగన్‌వాడీ కార్యకర్తతో నిర్ధారించుకోండి — మూలాలు వీటిని వేర్వేరుగా చెబుతున్నాయి.",
+            ["R_ConfirmState"] = "మీ రాష్ట్రాన్ని ఎంచుకోండి — రాష్ట్రాల మధ్య నియమాలు వేరుగా ఉంటాయి.",
+            ["R_JsyLowPerformingState"] = "మీ రాష్ట్రంలో ప్రభుత్వ లేదా గుర్తింపు పొందిన ఆసుపత్రిలో ప్రసవించే ప్రతి మహిళ అర్హురాలు, వయస్సు లేదా పిల్లల సంఖ్యతో సంబంధం లేకుండా.",
+            ["R_ConfirmRuralUrban"] = "మొత్తం చూడటానికి మీరు గ్రామీణ లేదా పట్టణ ప్రాంతంలో ఉంటారో చెప్పండి.",
+            ["R_JsyOtherState"] = "మీ రాష్ట్రంలో JSY 19+ ఏళ్ల BPL, SC లేదా ST మహిళలకు, మొదటి రెండు సజీవ జననాల వరకు.",
+            ["R_JsyParityLimit"] = "మీ రాష్ట్రంలో మొదటి రెండు సజీవ జననాలు మాత్రమే వర్తిస్తాయి.",
+            ["R_JsyAgeBelowMin"] = "మీ రాష్ట్రంలో కనీస వయస్సు 19.",
+            ["R_JsyCategoryRequired"] = "మీ రాష్ట్రంలో JSY BPL, SC లేదా ST కుటుంబాలకు.",
+            ["R_JsyConfirmAmount"] = "ఖచ్చితమైన మొత్తాన్ని మీ ఆశా కార్యకర్తతో నిర్ధారించుకోండి — ఇది రాష్ట్రాన్ని బట్టి మారుతుంది.",
+            ["R_JsskPublicFacility"] = "ప్రభుత్వ ఆసుపత్రిలో ప్రసవించే లేదా నవజాత శిశువును తీసుకువచ్చే ప్రతి ఒక్కరికీ ఉచితం.",
+            ["R_NoPregnancyOrInfant"] = "ఇది గర్భిణులు, కొత్త తల్లులు, నవజాత శిశువుల కోసం.",
+            ["R_UipFree"] = "ప్రభుత్వ ఆసుపత్రుల్లో ప్రతి బిడ్డకూ ఉచితం.",
+            ["R_NoInfant"] = "మీకు శిశువు ఉన్నప్పుడు ఇది వర్తిస్తుంది.",
+            ["Footer"] = "నియమాలు మారుతూ ఉంటాయి, రాష్ట్రాన్ని బట్టి వేరుగా ఉంటాయి. దీనిపై ఆధారపడే ముందు మీ ఆశా లేదా అంగన్‌వాడీ కార్యకర్తతో తప్పక నిర్ధారించుకోండి. అధికారిక మూలాలతో తనిఖీ చేయబడింది",
+        },
+    };
+
+    private string T(string key) =>
+        (Strings.TryGetValue(_language, out var dict) && dict.TryGetValue(key, out var value))
+            ? value
+            : Strings["English"].GetValueOrDefault(key, key);
+}

@@ -896,3 +896,16 @@ dialog.privacy-dialog h1 {
 .guardrail-sev { display: inline-block; min-width: 4.6rem; font-size: 0.78rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; }
 .sev-critical { color: var(--urgent-deep); }
 .sev-warning { color: #b7791f; }
+
+/* Government schemes page (Schemes.razor) */
+.guardrail-results { display: flex; flex-direction: column; gap: 0.7rem; grid-column: span 2; }
+.scheme-head { display: flex; justify-content: space-between; align-items: baseline; gap: 0.6rem; flex-wrap: wrap; }
+.scheme-amount { font-size: 1.15rem; font-weight: 700; color: var(--sage); margin: 0.2rem 0; }
+.scheme-next { font-size: 0.9rem; margin: 0.5rem 0 0; }
+.scheme-unlikely { opacity: 0.68; }
+.scheme-muted { color: var(--text-soft); }
+.scheme-likely { border-left: 4px solid var(--sage); }
+.scheme-possible { border-left: 4px solid #b7791f; }
+@media (max-width: 720px) { .guardrail-results { grid-column: auto; } }
+.form-field label.scheme-check { display: flex; align-items: flex-start; gap: 0.5rem; margin-bottom: 0.4rem; color: var(--text); }
+.scheme-check input[type="checkbox"] { width: auto; flex: 0 0 auto; padding: 0; margin: 0.25rem 0 0; }
