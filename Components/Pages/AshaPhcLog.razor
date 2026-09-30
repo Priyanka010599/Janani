@@ -89,6 +89,19 @@
     {
         _userId = await CurrentUser.GetUserIdAsync();
         _phcs = await Db.Phcs.AsNoTracking().OrderBy(p => p.State).ThenBy(p => p.Name).ToListAsync();
+
+        // Pre-populate both dictionaries with every medicine key up front --
+        // @bind:after triggers a render before OnPhcChangedAsync's await
+        // finishes, and @bind="_stockInputs[med]" in the @foreach below reads
+        // the dictionary indexer on that first render. An empty dictionary
+        // throws KeyNotFoundException there and kills the circuit -- found
+        // live (every PHC selection crashed), not caught by build/tests since
+        // it's a render-timing race, not a compile error.
+        foreach (var med in _medicines)
+        {
+            _stockInputs[med] = null;
+            _thresholdInputs[med] = DefaultThreshold(med);
+        }
     }
 
     private async Task OnPhcChangedAsync()
