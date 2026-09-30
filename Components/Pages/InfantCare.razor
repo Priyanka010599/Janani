@@ -101,6 +101,17 @@
                 @if (_doctorSaved) { <span class="sos-hint">✅ @T("Saved")</span> }
             </div>
 
+            <div class="plan-card">
+                <h3>🪪 @T("AbhaSectionTitle")</h3>
+                <p class="sos-hint">@T("AbhaSectionHint")</p>
+                <div class="form-row">
+                    <input @bind="_abhaInput" placeholder="@T("AbhaPlaceholder")" />
+                </div>
+                @if (_abhaError != null) { <p class="medicine-explanation-error">@_abhaError</p> }
+                <button class="bloom-btn secondary small-btn" @onclick="SaveAbhaAsync">@T("Save")</button>
+                @if (_abhaSaved) { <span class="sos-hint">✅ @T("Saved")</span> }
+            </div>
+
             @if (_selectedInfant.UserId == _currentUserId)
             {
                 <div class="plan-card">
@@ -261,6 +272,9 @@
     private DateOnly _newDateOfBirth = DateOnly.FromDateTime(DateTime.Today);
     private string _doctorNameInput = string.Empty;
     private string _doctorEmailInput = string.Empty;
+    private string _abhaInput = string.Empty;
+    private string? _abhaError;
+    private bool _abhaSaved;
     private bool _doctorSaved;
     private List<ShareInfo> _shares = [];
     private string _shareUsernameInput = string.Empty;
@@ -340,6 +354,9 @@
         _statusDescription = string.Empty;
         _doctorNameInput = infant.DoctorName ?? string.Empty;
         _doctorEmailInput = infant.DoctorEmail ?? string.Empty;
+        _abhaInput = infant.AbhaId ?? string.Empty;
+        _abhaError = null;
+        _abhaSaved = false;
         _doctorSaved = false;
         _lastFeeding = await Db.FeedingLogs.AsNoTracking()
             .Where(f => f.InfantProfileId == infant.Id)
@@ -404,6 +421,25 @@
         _selectedInfant.DoctorName = name;
         _selectedInfant.DoctorEmail = email;
         _doctorSaved = true;
+    }
+
+    private async Task SaveAbhaAsync()
+    {
+        if (_selectedInfant == null) return;
+        var abha = string.IsNullOrWhiteSpace(_abhaInput) ? null : _abhaInput.Trim();
+        if (!Services.FhirExportService.IsValidAbhaId(abha))
+        {
+            _abhaError = T("AbhaInvalid");
+            _abhaSaved = false;
+            return;
+        }
+        _abhaError = null;
+
+        await Db.InfantProfiles.Where(i => i.Id == _selectedInfant.Id)
+            .ExecuteUpdateAsync(s => s.SetProperty(i => i.AbhaId, abha));
+
+        _selectedInfant.AbhaId = abha;
+        _abhaSaved = true;
     }
 
     private async Task AcknowledgeAlertAsync()
@@ -669,6 +705,10 @@
             ["DoctorSectionHint"] = "If something Critical is flagged, Janani emails this doctor automatically — no setup needed.",
             ["DoctorNamePlaceholder"] = "Doctor's name",
             ["DoctorEmailPlaceholder"] = "Doctor's email",
+            ["AbhaSectionTitle"] = "ABHA ID",
+            ["AbhaSectionHint"] = "Optional. Lets a clinic link his records to his Ayushman Bharat Health Account.",
+            ["AbhaPlaceholder"] = "14-digit ABHA number or name@abdm",
+            ["AbhaInvalid"] = "That doesn't look like an ABHA number (14 digits) or address (name@abdm).",
             ["Save"] = "Save",
             ["Saved"] = "Saved",
             ["ShareSectionTitle"] = "Share with another caregiver",
@@ -742,6 +782,10 @@
             ["DoctorSectionHint"] = "यदि कुछ गंभीर के रूप में चिह्नित होता है, तो जनानी अपने आप इस डॉक्टर को ईमेल करती है — कोई सेटअप ज़रूरी नहीं।",
             ["DoctorNamePlaceholder"] = "डॉक्टर का नाम",
             ["DoctorEmailPlaceholder"] = "डॉक्टर का ईमेल",
+            ["AbhaSectionTitle"] = "ABHA ID",
+            ["AbhaSectionHint"] = "वैकल्पिक। इससे कोई क्लिनिक उसके रिकॉर्ड को उसके आयुष्मान भारत हेल्थ अकाउंट से जोड़ सकता है।",
+            ["AbhaPlaceholder"] = "14 अंकों की ABHA संख्या या name@abdm",
+            ["AbhaInvalid"] = "यह ABHA नंबर (14 अंक) या पता (name@abdm) जैसा नहीं लगता।",
             ["Save"] = "सहेजें",
             ["Saved"] = "सहेजा गया",
             ["ShareSectionTitle"] = "किसी अन्य देखभालकर्ता के साथ साझा करें",
@@ -815,6 +859,10 @@
             ["DoctorSectionHint"] = "ఏదైనా తీవ్రమైనదిగా గుర్తించబడితే, జననీ స్వయంచాలకంగా ఈ డాక్టర్‌కి ఇమెయిల్ పంపుతుంది — ఎటువంటి సెటప్ అవసరం లేదు.",
             ["DoctorNamePlaceholder"] = "డాక్టర్ పేరు",
             ["DoctorEmailPlaceholder"] = "డాక్టర్ ఇమెయిల్",
+            ["AbhaSectionTitle"] = "ABHA ID",
+            ["AbhaSectionHint"] = "ఐచ్ఛికం. దీనితో ఒక క్లినిక్ అతని రికార్డులను అతని ఆయుష్మాన్ భారత్ హెల్త్ అకౌంట్‌తో లింక్ చేయగలదు.",
+            ["AbhaPlaceholder"] = "14 అంకెల ABHA నంబర్ లేదా name@abdm",
+            ["AbhaInvalid"] = "ఇది ABHA నంబర్ (14 అంకెలు) లేదా చిరునామా (name@abdm) లా లేదు.",
             ["Save"] = "సేవ్ చేయండి",
             ["Saved"] = "సేవ్ చేయబడింది",
             ["ShareSectionTitle"] = "మరొక సంరక్షకునితో పంచుకోండి",

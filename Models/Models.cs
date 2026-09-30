@@ -529,6 +529,11 @@ public class ElderProfile
     // household-wide contact: different dependents can have different doctors.
     public string? DoctorName { get; set; }
     public string? DoctorEmail { get; set; }
+
+    // 14-digit ABHA number, or an ABHA address (name@abdm) -- per-dependent, since
+    // each person has their own ABDM health account, not the caregiver's.
+    // See FhirExportService.IsValidAbhaId for the format this is checked against.
+    public string? AbhaId { get; set; }
 }
 
 // Manually entered for now (per the current build phase — device/wearable
@@ -619,6 +624,9 @@ public class InfantProfile
     // InfantCare.razor's SaveGrowthAsync.
     public string? DoctorName { get; set; }
     public string? DoctorEmail { get; set; }
+
+    // Same reasoning as ElderProfile.AbhaId -- see that field's comment.
+    public string? AbhaId { get; set; }
 
     public int AgeInWeeks =>
         Math.Max(0, (DateOnly.FromDateTime(DateTime.Today).ToDateTime(TimeOnly.MinValue)

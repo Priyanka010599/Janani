@@ -663,11 +663,14 @@ using (var scope = app.Services.CreateScope())
             db.Database.ExecuteSqlRaw("ALTER TABLE ElderProfiles ADD COLUMN DoctorName TEXT NULL;");
         if (!ElderColumnExists("DoctorEmail"))
             db.Database.ExecuteSqlRaw("ALTER TABLE ElderProfiles ADD COLUMN DoctorEmail TEXT NULL;");
+        if (!ElderColumnExists("AbhaId"))
+            db.Database.ExecuteSqlRaw("ALTER TABLE ElderProfiles ADD COLUMN AbhaId TEXT NULL;");
     }
     else
     {
         db.Database.ExecuteSqlRaw("""ALTER TABLE "ElderProfiles" ADD COLUMN IF NOT EXISTS "DoctorName" text NULL;""");
         db.Database.ExecuteSqlRaw("""ALTER TABLE "ElderProfiles" ADD COLUMN IF NOT EXISTS "DoctorEmail" text NULL;""");
+        db.Database.ExecuteSqlRaw("""ALTER TABLE "ElderProfiles" ADD COLUMN IF NOT EXISTS "AbhaId" text NULL;""");
     }
 
     db.Database.ExecuteSqlRaw($"""
@@ -778,11 +781,14 @@ using (var scope = app.Services.CreateScope())
             db.Database.ExecuteSqlRaw("ALTER TABLE InfantProfiles ADD COLUMN DoctorName TEXT NULL;");
         if (!InfantColumnExists("DoctorEmail"))
             db.Database.ExecuteSqlRaw("ALTER TABLE InfantProfiles ADD COLUMN DoctorEmail TEXT NULL;");
+        if (!InfantColumnExists("AbhaId"))
+            db.Database.ExecuteSqlRaw("ALTER TABLE InfantProfiles ADD COLUMN AbhaId TEXT NULL;");
     }
     else
     {
         db.Database.ExecuteSqlRaw("""ALTER TABLE "InfantProfiles" ADD COLUMN IF NOT EXISTS "DoctorName" text NULL;""");
         db.Database.ExecuteSqlRaw("""ALTER TABLE "InfantProfiles" ADD COLUMN IF NOT EXISTS "DoctorEmail" text NULL;""");
+        db.Database.ExecuteSqlRaw("""ALTER TABLE "InfantProfiles" ADD COLUMN IF NOT EXISTS "AbhaId" text NULL;""");
     }
 
     db.Database.ExecuteSqlRaw($"""

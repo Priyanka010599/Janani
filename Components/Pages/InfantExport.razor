@@ -24,6 +24,7 @@ else
     <div class="bloom-container export-page">
         <div class="export-actions no-print">
             <button class="bloom-btn primary" @onclick="PrintAsync">🖨️ Print / Save as PDF</button>
+            <button class="bloom-btn secondary" @onclick="DownloadFhirAsync">🪪 Download FHIR JSON</button>
             <a class="bloom-btn secondary" href="/infant-care">← Back</a>
         </div>
 
@@ -99,6 +100,7 @@ else
     private List<GrowthEntry> _growth = [];
     private List<InfantAlert> _alerts = [];
     private List<VaccinationSchedule.VaccineWithStatus> _vaccineStatuses = [];
+    private List<VaccinationRecord> _given = [];
 
     protected override async Task OnInitializedAsync()
     {
@@ -120,12 +122,20 @@ else
             .Take(10)
             .ToListAsync();
 
-        var given = await Db.VaccinationRecords.AsNoTracking()
+        _given = await Db.VaccinationRecords.AsNoTracking()
             .Where(v => v.InfantProfileId == InfantId)
             .ToListAsync();
-        _vaccineStatuses = VaccinationSchedule.BuildStatus(_infant.AgeInWeeks, given);
+        _vaccineStatuses = VaccinationSchedule.BuildStatus(_infant.AgeInWeeks, _given);
         _loaded = true;
     }
 
     private async Task PrintAsync() => await JS.InvokeVoidAsync("print");
+
+    private async Task DownloadFhirAsync()
+    {
+        if (_infant == null) return;
+        var json = FhirExportService.BuildInfantImmunizationBundle(_infant, _given);
+        var filename = $"{_infant.Name.Replace(' ', '-')}-fhir-immunization-{DateTime.UtcNow:yyyyMMdd}.json";
+        await JS.InvokeVoidAsync("downloadTextFile", filename, json, "application/fhir+json");
+    }
 }
