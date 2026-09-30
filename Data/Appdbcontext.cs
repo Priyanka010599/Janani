@@ -46,6 +46,9 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
     public DbSet<PostpartumCheckIn> PostpartumCheckIns => Set<PostpartumCheckIn>();
     public DbSet<PostpartumAlert> PostpartumAlerts => Set<PostpartumAlert>();
     public DbSet<EpdsScreening> EpdsScreenings => Set<EpdsScreening>();
+    public DbSet<Phc> Phcs => Set<Phc>();
+    public DbSet<PhcStockItem> PhcStockItems => Set<PhcStockItem>();
+    public DbSet<PhcFootfallEntry> PhcFootfallEntries => Set<PhcFootfallEntry>();
     public DbSet<Microsoft.AspNetCore.DataProtection.EntityFrameworkCore.DataProtectionKey> DataProtectionKeys => Set<Microsoft.AspNetCore.DataProtection.EntityFrameworkCore.DataProtectionKey>();
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -117,5 +120,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
         modelBuilder.Entity<PostpartumAlert>().HasIndex(a => a.TriggeredAt);
         modelBuilder.Entity<EpdsScreening>().HasIndex(e => e.UserId);
         modelBuilder.Entity<EpdsScreening>().HasIndex(e => e.AdministeredAt);
+        modelBuilder.Entity<PhcStockItem>().HasIndex(s => new { s.PhcId, s.MedicineName }).IsUnique();
+        modelBuilder.Entity<PhcFootfallEntry>().HasIndex(f => new { f.PhcId, f.Date });
     }
 }

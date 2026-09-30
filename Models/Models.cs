@@ -12,6 +12,40 @@ public class User
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 }
 
+// A Primary Health Centre -- the facility an ASHA worker's home-visit round
+// (see HbncVisitSchedule) is attached to. Seeded, not user-created: PHC
+// identity is administrative, not something an app user invents.
+public class Phc
+{
+    public int Id { get; set; }
+    public string Name { get; set; } = string.Empty;
+    public string District { get; set; } = string.Empty;
+    public string State { get; set; } = string.Empty;
+}
+
+// The CURRENT stock level for one medicine at one PHC -- upserted on every
+// ASHA worker log, not an append-only history. A supervisor dashboard wants
+// "what's the stock right now," not a full audit trail (v1 scope).
+public class PhcStockItem
+{
+    public int Id { get; set; }
+    public int PhcId { get; set; }
+    public string MedicineName { get; set; } = string.Empty;
+    public int StockCount { get; set; }
+    public int ReorderThreshold { get; set; }
+    public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
+    public int LoggedByUserId { get; set; }
+}
+
+public class PhcFootfallEntry
+{
+    public int Id { get; set; }
+    public int PhcId { get; set; }
+    public DateOnly Date { get; set; }
+    public int PatientCount { get; set; }
+    public int LoggedByUserId { get; set; }
+}
+
 public class UserProfile
 {
     public int Id { get; set; }
@@ -55,6 +89,11 @@ public class UserProfile
 
     // See FhirExportService.IsValidAbhaId for the two accepted forms.
     public string? AbhaId { get; set; }
+
+    // Links her to the real-time PHC stock picture (see AshaSupplyOverview) --
+    // the same PHC her ASHA worker's HBNC rounds and government-scheme
+    // guidance already point her toward. Null until she picks one.
+    public int? PhcId { get; set; }
 
     public int CurrentWeek =>
         Math.Min(40, Math.Max(1,

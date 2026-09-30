@@ -587,6 +587,12 @@ using (var scope = app.Services.CreateScope())
         db.Database.ExecuteSqlRaw("ALTER TABLE UserProfiles ADD COLUMN AbhaId TEXT NULL;");
     }
 
+    // Links her to the PHC supply picture — see UserProfile.PhcId's comment.
+    if (!ColumnExists("UserProfiles", "PhcId"))
+    {
+        db.Database.ExecuteSqlRaw("ALTER TABLE UserProfiles ADD COLUMN PhcId INTEGER NULL;");
+    }
+
     } // isSqlite
 
     // Same TracksPregnancy/Language backfill as above, Postgres side —
@@ -609,6 +615,7 @@ using (var scope = app.Services.CreateScope())
         db.Database.ExecuteSqlRaw("""ALTER TABLE "UserProfiles" ADD COLUMN IF NOT EXISTS "BabyDate" date NULL;""");
         db.Database.ExecuteSqlRaw("""ALTER TABLE "UserProfiles" ADD COLUMN IF NOT EXISTS "DevicePairingToken" text NULL;""");
         db.Database.ExecuteSqlRaw("""ALTER TABLE "UserProfiles" ADD COLUMN IF NOT EXISTS "AbhaId" text NULL;""");
+        db.Database.ExecuteSqlRaw("""ALTER TABLE "UserProfiles" ADD COLUMN IF NOT EXISTS "PhcId" integer NULL;""");
     }
 
     // Elder-care tables were added after BOTH the local janani.db AND the
@@ -1061,6 +1068,41 @@ using (var scope = app.Services.CreateScope())
     db.Database.ExecuteSqlRaw("""CREATE INDEX IF NOT EXISTS "IX_EpdsScreenings_UserId" ON "EpdsScreenings" ("UserId");""");
     db.Database.ExecuteSqlRaw("""CREATE INDEX IF NOT EXISTS "IX_EpdsScreenings_AdministeredAt" ON "EpdsScreenings" ("AdministeredAt");""");
 
+    // PHC supply-chain visibility: Phcs/PhcStockItems/PhcFootfallEntries.
+    // Same dual-provider pattern as everything else in this shared block
+    // (dateType already declared above, near EpdsScreenings).
+    db.Database.ExecuteSqlRaw($"""
+        CREATE TABLE IF NOT EXISTS "Phcs" (
+            {idColumn},
+            "Name" {textType} NOT NULL,
+            "District" {textType} NOT NULL,
+            "State" {textType} NOT NULL
+        );
+        """);
+    db.Database.ExecuteSqlRaw($"""
+        CREATE TABLE IF NOT EXISTS "PhcStockItems" (
+            {idColumn},
+            "PhcId" INTEGER NOT NULL,
+            "MedicineName" {textType} NOT NULL,
+            "StockCount" INTEGER NOT NULL,
+            "ReorderThreshold" INTEGER NOT NULL,
+            "UpdatedAt" {timestampType} NOT NULL,
+            "LoggedByUserId" INTEGER NOT NULL
+        );
+        """);
+    db.Database.ExecuteSqlRaw("""CREATE UNIQUE INDEX IF NOT EXISTS "IX_PhcStockItems_PhcId_MedicineName" ON "PhcStockItems" ("PhcId", "MedicineName");""");
+    db.Database.ExecuteSqlRaw($"""
+        CREATE TABLE IF NOT EXISTS "PhcFootfallEntries" (
+            {idColumn},
+            "PhcId" INTEGER NOT NULL,
+            "Date" {dateType} NOT NULL,
+            "PatientCount" INTEGER NOT NULL,
+            "LoggedByUserId" INTEGER NOT NULL
+        );
+        """);
+    db.Database.ExecuteSqlRaw("""CREATE INDEX IF NOT EXISTS "IX_PhcFootfallEntries_PhcId_Date" ON "PhcFootfallEntries" ("PhcId", "Date");""");
+
+    SeedPhcs(db);
     SeedDemoAccount(db);
 }
 
@@ -1073,6 +1115,53 @@ using (var scope = app.Services.CreateScope())
 // the container partway through, leaving a demo user with no infant data)
 // rolls back cleanly instead of leaving a half-seeded account that the
 // existence check above would then skip forever.
+// Seeds a handful of real PHCs across two states/districts, each starting
+// with a couple of medicines already logged — a supervisor opening the
+// overview for the first time sees live-looking stock data, not an empty
+// shell, and the two states/districts exist specifically so the
+// redistribution matcher and the government-schemes state-awareness beat
+// both have something real to demonstrate. Idempotent on Phcs.Name.
+void SeedPhcs(AppDbContext db)
+{
+    if (db.Phcs.Any()) return;
+
+    var phcs = new List<Phc>
+    {
+        new() { Name = "PHC Warangal Rural", District = "Warangal", State = "Telangana" },
+        new() { Name = "PHC Hanamkonda", District = "Hanamkonda", State = "Telangana" },
+        new() { Name = "PHC Patna Sadar", District = "Patna", State = "Bihar" },
+    };
+    db.Phcs.AddRange(phcs);
+    db.SaveChanges();
+
+    var now = DateTime.UtcNow;
+    var stock = new List<PhcStockItem>
+    {
+        // Warangal Rural — low on Oxytocin (Critical), everything else fine.
+        new() { PhcId = phcs[0].Id, MedicineName = "Oxytocin", StockCount = 8, ReorderThreshold = 20, UpdatedAt = now },
+        new() { PhcId = phcs[0].Id, MedicineName = "ORS packets", StockCount = 240, ReorderThreshold = 50, UpdatedAt = now },
+        new() { PhcId = phcs[0].Id, MedicineName = "Iron-Folic Acid tablets", StockCount = 90, ReorderThreshold = 40, UpdatedAt = now },
+
+        // Hanamkonda — real surplus of Oxytocin, the redistribution donor.
+        new() { PhcId = phcs[1].Id, MedicineName = "Oxytocin", StockCount = 85, ReorderThreshold = 20, UpdatedAt = now },
+        new() { PhcId = phcs[1].Id, MedicineName = "ORS packets", StockCount = 60, ReorderThreshold = 50, UpdatedAt = now },
+        new() { PhcId = phcs[1].Id, MedicineName = "Amoxicillin", StockCount = 30, ReorderThreshold = 25, UpdatedAt = now },
+
+        // Patna Sadar — low on ORS (Critical), different state entirely.
+        new() { PhcId = phcs[2].Id, MedicineName = "ORS packets", StockCount = 12, ReorderThreshold = 50, UpdatedAt = now },
+        new() { PhcId = phcs[2].Id, MedicineName = "Oxytocin", StockCount = 40, ReorderThreshold = 20, UpdatedAt = now },
+        new() { PhcId = phcs[2].Id, MedicineName = "Paracetamol", StockCount = 300, ReorderThreshold = 60, UpdatedAt = now },
+    };
+    db.PhcStockItems.AddRange(stock);
+
+    var today = DateOnly.FromDateTime(DateTime.UtcNow);
+    db.PhcFootfallEntries.AddRange(
+        new PhcFootfallEntry { PhcId = phcs[0].Id, Date = today, PatientCount = 34 },
+        new PhcFootfallEntry { PhcId = phcs[1].Id, Date = today, PatientCount = 21 },
+        new PhcFootfallEntry { PhcId = phcs[2].Id, Date = today, PatientCount = 47 });
+    db.SaveChanges();
+}
+
 void SeedDemoAccount(AppDbContext db)
 {
     var existingDemoUser = db.Users.FirstOrDefault(u => u.Username == "demo");

@@ -1,0 +1,171 @@
+@page "/asha/phc-log"
+@using Janani.Models
+@using Janani.Data
+@using Janani.Services
+@using Microsoft.EntityFrameworkCore
+@inject AppDbContext Db
+@inject CurrentUserService CurrentUser
+@rendermode InteractiveServer
+
+<PageTitle>Janani — PHC Stock Log</PageTitle>
+
+<div class="bloom-container">
+    <div class="section-header">
+        <h1><Icon Name="meds"/> PHC Stock &amp; Footfall Log</h1>
+        <p class="subtitle">For the ASHA worker or PHC staff logging what's actually on the shelf, during the same rounds already tracked in Recovery Plan's HBNC schedule.</p>
+    </div>
+
+    <div class="plan-card">
+        <h3>Which PHC</h3>
+        <div class="form-field">
+            <select @bind="_phcId" @bind:after="OnPhcChangedAsync">
+                <option value="0">— choose —</option>
+                @foreach (var phc in _phcs)
+                {
+                    <option value="@phc.Id">@phc.Name (@phc.District, @phc.State)</option>
+                }
+            </select>
+        </div>
+    </div>
+
+    @if (_phcId != 0)
+    {
+        <div class="plan-card">
+            <h3>Medicine stock</h3>
+            <p class="sos-hint">Enter today's count and reorder line for each medicine you're checking. A fixed rule — not a model — decides what's Critical.</p>
+            @foreach (var med in _medicines)
+            {
+                <div class="form-row">
+                    <span style="min-width:170px; display:inline-block;">@med</span>
+                    <input type="number" placeholder="Stock" @bind="_stockInputs[med]" style="width:90px;" />
+                    <input type="number" placeholder="Reorder at" @bind="_thresholdInputs[med]" style="width:100px;" />
+                </div>
+            }
+            <button class="bloom-btn primary" @onclick="SaveStockAsync">Save stock counts</button>
+            @if (_stockSaved) { <span class="sos-hint">✅ Saved</span> }
+        </div>
+
+        <div class="plan-card">
+            <h3>Today's patient footfall</h3>
+            <div class="form-row">
+                <input type="number" placeholder="Patients seen today" @bind="_footfallInput" style="width:140px;" />
+                <button class="bloom-btn secondary" @onclick="SaveFootfallAsync">Save</button>
+                @if (_footfallSaved) { <span class="sos-hint">✅ Saved</span> }
+            </div>
+        </div>
+
+        <div class="plan-card">
+            <h3>Current status at @_selectedPhc?.Name</h3>
+            @foreach (var item in _currentStock)
+            {
+                var status = PhcStockChecker.Status(item);
+                <p>
+                    <span class="guardrail-sev @StatusClass(status)">@status</span>
+                    @item.MedicineName — @item.StockCount in stock (reorder at @item.ReorderThreshold)
+                </p>
+            }
+        </div>
+    }
+
+    <p class="data-source-note" style="margin-top:16px;"><a href="/asha/supply-overview">See the supervisor overview across all PHCs →</a></p>
+</div>
+
+@code {
+    private List<Phc> _phcs = [];
+    private int _phcId;
+    private Phc? _selectedPhc;
+    private List<PhcStockItem> _currentStock = [];
+    private int _userId;
+
+    private readonly string[] _medicines =
+        ["Oxytocin", "ORS packets", "Iron-Folic Acid tablets", "Amoxicillin", "Paracetamol", "BCG vaccine"];
+    private readonly Dictionary<string, int?> _stockInputs = new();
+    private readonly Dictionary<string, int?> _thresholdInputs = new();
+    private bool _stockSaved;
+    private int? _footfallInput;
+    private bool _footfallSaved;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _userId = await CurrentUser.GetUserIdAsync();
+        _phcs = await Db.Phcs.AsNoTracking().OrderBy(p => p.State).ThenBy(p => p.Name).ToListAsync();
+    }
+
+    private async Task OnPhcChangedAsync()
+    {
+        _selectedPhc = _phcs.FirstOrDefault(p => p.Id == _phcId);
+        _currentStock = await Db.PhcStockItems.AsNoTracking().Where(s => s.PhcId == _phcId).ToListAsync();
+        foreach (var med in _medicines)
+        {
+            var existing = _currentStock.FirstOrDefault(s => s.MedicineName == med);
+            _stockInputs[med] = existing?.StockCount;
+            _thresholdInputs[med] = existing?.ReorderThreshold ?? DefaultThreshold(med);
+        }
+        _stockSaved = false;
+        _footfallSaved = false;
+    }
+
+    private static int DefaultThreshold(string med) => med switch
+    {
+        "Oxytocin" => 20,
+        "ORS packets" => 50,
+        "Amoxicillin" => 25,
+        _ => 30
+    };
+
+    private async Task SaveStockAsync()
+    {
+        if (_phcId == 0) return;
+        foreach (var med in _medicines)
+        {
+            if (_stockInputs.TryGetValue(med, out var stock) && stock is { } stockVal)
+            {
+                var threshold = _thresholdInputs.TryGetValue(med, out var t) && t is { } tVal ? tVal : DefaultThreshold(med);
+                var existing = await Db.PhcStockItems.FirstOrDefaultAsync(s => s.PhcId == _phcId && s.MedicineName == med);
+                if (existing != null)
+                {
+                    existing.StockCount = stockVal;
+                    existing.ReorderThreshold = threshold;
+                    existing.UpdatedAt = DateTime.UtcNow;
+                    existing.LoggedByUserId = _userId;
+                }
+                else
+                {
+                    Db.PhcStockItems.Add(new PhcStockItem
+                    {
+                        PhcId = _phcId, MedicineName = med, StockCount = stockVal,
+                        ReorderThreshold = threshold, UpdatedAt = DateTime.UtcNow, LoggedByUserId = _userId
+                    });
+                }
+            }
+        }
+        await Db.SaveChangesAsync();
+        _currentStock = await Db.PhcStockItems.AsNoTracking().Where(s => s.PhcId == _phcId).ToListAsync();
+        _stockSaved = true;
+    }
+
+    private async Task SaveFootfallAsync()
+    {
+        if (_phcId == 0 || _footfallInput is not { } count) return;
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        var existing = await Db.PhcFootfallEntries.FirstOrDefaultAsync(f => f.PhcId == _phcId && f.Date == today);
+        if (existing != null)
+        {
+            existing.PatientCount = count;
+            existing.LoggedByUserId = _userId;
+        }
+        else
+        {
+            Db.PhcFootfallEntries.Add(new PhcFootfallEntry { PhcId = _phcId, Date = today, PatientCount = count, LoggedByUserId = _userId });
+        }
+        await Db.SaveChangesAsync();
+        _footfallSaved = true;
+    }
+
+    private static string StatusClass(PhcStockStatus status) => status switch
+    {
+        PhcStockStatus.Critical => "sev-critical",
+        PhcStockStatus.Warning => "sev-warning",
+        _ => "guardrail-ok"
+    };
+}

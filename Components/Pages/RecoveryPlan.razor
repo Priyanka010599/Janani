@@ -40,6 +40,31 @@
             </div>
         </div>
 
+        <div class="plan-card">
+            <h3>🏥 Your PHC</h3>
+            <p class="sos-hint">The same Primary Health Centre your ASHA worker's HBNC visits and scheme registration point to — see what's actually in stock there right now.</p>
+            <div class="form-field">
+                <select @bind="_phcId" @bind:after="SavePhcAsync">
+                    <option value="0">— choose your PHC —</option>
+                    @foreach (var phc in _phcs)
+                    {
+                        <option value="@phc.Id">@phc.Name (@phc.District, @phc.State)</option>
+                    }
+                </select>
+            </div>
+            @if (_phcId != 0 && _phcStock.Count > 0)
+            {
+                @foreach (var item in _phcStock)
+                {
+                    var status = PhcStockChecker.Status(item);
+                    <p>
+                        <span class="guardrail-sev @(status == PhcStockStatus.Critical ? "sev-critical" : status == PhcStockStatus.Warning ? "sev-warning" : "guardrail-ok")">@status</span>
+                        @item.MedicineName — @item.StockCount in stock
+                    </p>
+                }
+            }
+        </div>
+
         <div class="plan-card urgent-card">
             <h3>🚩 @T("RedFlagsTitle")</h3>
             <p class="sos-hint">@T("RedFlagsHint")</p>
@@ -128,6 +153,9 @@
     private string _abhaInput = string.Empty;
     private string? _abhaError;
     private bool _abhaSaved;
+    private List<Phc> _phcs = [];
+    private int _phcId;
+    private List<PhcStockItem> _phcStock = [];
 
     protected override async Task OnInitializedAsync()
     {
@@ -136,6 +164,10 @@
         _language = (profile?.Language ?? AppLanguage.English).ToString();
         _postpartumDay = profile?.PostpartumDay;
         _abhaInput = profile?.AbhaId ?? string.Empty;
+        _phcs = await Db.Phcs.AsNoTracking().OrderBy(p => p.State).ThenBy(p => p.Name).ToListAsync();
+        _phcId = profile?.PhcId ?? 0;
+        if (_phcId != 0)
+            _phcStock = await Db.PhcStockItems.AsNoTracking().Where(s => s.PhcId == _phcId).ToListAsync();
 
         if (_postpartumDay == null) return;
 
@@ -154,6 +186,15 @@
         // own "hbnc-dayN" keys -- no separate visit table.
         var completedAtByKey = completions.ToDictionary(c => c.ItemKey, c => c.CompletedAt);
         _hbncVisits = HbncVisitSchedule.BuildStatus(_postpartumDay, completedAtByKey);
+    }
+
+    private async Task SavePhcAsync()
+    {
+        if (_phcId == 0) { _phcStock = []; return; }
+        await Db.UserProfiles.Where(p => p.UserId == _userId)
+            .ExecuteUpdateAsync(s => s.SetProperty(p => p.PhcId, _phcId));
+        ProfileCache.Invalidate();
+        _phcStock = await Db.PhcStockItems.AsNoTracking().Where(s => s.PhcId == _phcId).ToListAsync();
     }
 
     private async Task ToggleCompletionAsync(string itemKey)

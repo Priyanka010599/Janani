@@ -1,0 +1,91 @@
+@page "/asha/supply-overview"
+@using Janani.Models
+@using Janani.Data
+@using Janani.Services
+@using Microsoft.EntityFrameworkCore
+@inject AppDbContext Db
+@rendermode InteractiveServer
+
+<PageTitle>Janani — PHC Supply Overview</PageTitle>
+
+<div class="bloom-container guardrail-wide">
+    <div class="section-header">
+        <h1><Icon Name="vitals"/> PHC Supply Overview</h1>
+        <p class="subtitle">Real-time stock and footfall across every PHC logging through Janani — the status and redistribution suggestions below are worked out by fixed rules, not a model.</p>
+    </div>
+
+    <div class="guardrail-steps">
+        @foreach (var phcGroup in _stockByPhc)
+        {
+            <div class="plan-card guardrail-step">
+                <h3>@phcGroup.Key.Name <span class="sos-hint">— @phcGroup.Key.District, @phcGroup.Key.State</span></h3>
+                @if (_footfallByPhc.TryGetValue(phcGroup.Key.Id, out var footfall))
+                {
+                    <p class="sos-hint">Today's footfall: @footfall patients</p>
+                }
+                @foreach (var item in phcGroup.OrderBy(i => i.MedicineName))
+                {
+                    var status = PhcStockChecker.Status(item);
+                    <p>
+                        <span class="guardrail-sev @StatusClass(status)">@status</span>
+                        @item.MedicineName — @item.StockCount (reorder at @item.ReorderThreshold)
+                    </p>
+                }
+            </div>
+        }
+    </div>
+
+    <div class="plan-card" style="margin-top:20px;">
+        <h3>🔁 Recommended cross-PHC redistribution</h3>
+        <p class="sos-hint">A PHC with real surplus, matched against a PHC below its reorder line for the same medicine — plain code, no logistics routing yet.</p>
+        @if (_recommendations.Count == 0)
+        {
+            <p class="sos-hint">No redistribution needed right now — nothing is both Critical and matched by a surplus elsewhere.</p>
+        }
+        else
+        {
+            @foreach (var rec in _recommendations)
+            {
+                <div class="scheme-card scheme-possible">
+                    <div class="scheme-head">
+                        <strong>@rec.MedicineName: @rec.FromPhc.Name → @rec.ToPhc.Name</strong>
+                        <span class="guardrail-sev sev-warning">~@rec.SuggestedUnits units</span>
+                    </div>
+                    <p class="data-source-note">@rec.Reason</p>
+                </div>
+            }
+        }
+    </div>
+
+    <p class="data-source-note guardrail-footer">Seeded across Telangana and Bihar to show the rules apply the same way regardless of state — this is the seed of national-scale visibility, demonstrated at PHC scale.</p>
+</div>
+
+@code {
+    private ILookup<Phc, PhcStockItem> _stockByPhc = Enumerable.Empty<PhcStockItem>().ToLookup(i => new Phc());
+    private Dictionary<int, int> _footfallByPhc = new();
+    private List<PhcRedistributionMatcher.Recommendation> _recommendations = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        var phcs = await Db.Phcs.AsNoTracking().ToListAsync();
+        var items = await Db.PhcStockItems.AsNoTracking().ToListAsync();
+        var phcById = phcs.ToDictionary(p => p.Id);
+
+        _stockByPhc = items
+            .Where(i => phcById.ContainsKey(i.PhcId))
+            .ToLookup(i => phcById[i.PhcId]);
+
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        var footfall = await Db.PhcFootfallEntries.AsNoTracking().Where(f => f.Date == today).ToListAsync();
+        _footfallByPhc = footfall.ToDictionary(f => f.PhcId, f => f.PatientCount);
+
+        _recommendations = PhcRedistributionMatcher.Recommend(phcs, items);
+    }
+
+    private static string StatusClass(PhcStockStatus status) => status switch
+    {
+        PhcStockStatus.Critical => "sev-critical",
+        PhcStockStatus.Warning => "sev-warning",
+        _ => "guardrail-ok"
+    };
+}
