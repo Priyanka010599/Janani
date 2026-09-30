@@ -580,6 +580,13 @@ using (var scope = app.Services.CreateScope())
         db.Database.ExecuteSqlRaw("ALTER TABLE UserProfiles ADD COLUMN DevicePairingToken TEXT NULL;");
     }
 
+    // ABHA ID for the woman herself — same field/validation as the elder and
+    // infant profiles, see FhirExportService.IsValidAbhaId.
+    if (!ColumnExists("UserProfiles", "AbhaId"))
+    {
+        db.Database.ExecuteSqlRaw("ALTER TABLE UserProfiles ADD COLUMN AbhaId TEXT NULL;");
+    }
+
     } // isSqlite
 
     // Same TracksPregnancy/Language backfill as above, Postgres side —
@@ -601,6 +608,7 @@ using (var scope = app.Services.CreateScope())
         db.Database.ExecuteSqlRaw("""ALTER TABLE "UserProfiles" ADD COLUMN IF NOT EXISTS "BabyName" text NULL;""");
         db.Database.ExecuteSqlRaw("""ALTER TABLE "UserProfiles" ADD COLUMN IF NOT EXISTS "BabyDate" date NULL;""");
         db.Database.ExecuteSqlRaw("""ALTER TABLE "UserProfiles" ADD COLUMN IF NOT EXISTS "DevicePairingToken" text NULL;""");
+        db.Database.ExecuteSqlRaw("""ALTER TABLE "UserProfiles" ADD COLUMN IF NOT EXISTS "AbhaId" text NULL;""");
     }
 
     // Elder-care tables were added after BOTH the local janani.db AND the

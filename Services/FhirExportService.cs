@@ -60,15 +60,37 @@ public static class FhirExportService
         foreach (var r in readings)
         {
             if (r.SystolicBp is { } sys)
-                entries.Add(VitalEntry(patientId, r, "8480-6", "Systolic blood pressure", sys, "mm[Hg]"));
+                entries.Add(VitalEntry(patientId, r.Id, r.RecordedAt, "8480-6", "Systolic blood pressure", sys, "mm[Hg]"));
             if (r.DiastolicBp is { } dia)
-                entries.Add(VitalEntry(patientId, r, "8462-4", "Diastolic blood pressure", dia, "mm[Hg]"));
+                entries.Add(VitalEntry(patientId, r.Id, r.RecordedAt, "8462-4", "Diastolic blood pressure", dia, "mm[Hg]"));
             if (r.HeartRate is { } hr)
-                entries.Add(VitalEntry(patientId, r, "8867-4", "Heart rate", hr, "/min"));
+                entries.Add(VitalEntry(patientId, r.Id, r.RecordedAt, "8867-4", "Heart rate", hr, "/min"));
             if (r.TemperatureC is { } temp)
-                entries.Add(VitalEntry(patientId, r, "8310-5", "Body temperature", temp, "Cel"));
+                entries.Add(VitalEntry(patientId, r.Id, r.RecordedAt, "8310-5", "Body temperature", temp, "Cel"));
             if (r.OxygenSaturation is { } spo2)
-                entries.Add(VitalEntry(patientId, r, "59408-5", "Oxygen saturation, pulse oximetry", spo2, "%"));
+                entries.Add(VitalEntry(patientId, r.Id, r.RecordedAt, "59408-5", "Oxygen saturation, pulse oximetry", spo2, "%"));
+        }
+
+        return Bundle(entries);
+    }
+
+    public static string BuildMaternalVitalsBundle(UserProfile user, IReadOnlyList<PregnancyVitalsReading> readings)
+    {
+        var patientId = "patient-maternal-" + user.Id;
+        var entries = new List<object> { PatientEntry(patientId, user.Name, user.AbhaId) };
+
+        foreach (var r in readings)
+        {
+            if (r.SystolicBp is { } sys)
+                entries.Add(VitalEntry(patientId, r.Id, r.RecordedAt, "8480-6", "Systolic blood pressure", sys, "mm[Hg]"));
+            if (r.DiastolicBp is { } dia)
+                entries.Add(VitalEntry(patientId, r.Id, r.RecordedAt, "8462-4", "Diastolic blood pressure", dia, "mm[Hg]"));
+            if (r.HeartRate is { } hr)
+                entries.Add(VitalEntry(patientId, r.Id, r.RecordedAt, "8867-4", "Heart rate", hr, "/min"));
+            if (r.TemperatureC is { } temp)
+                entries.Add(VitalEntry(patientId, r.Id, r.RecordedAt, "8310-5", "Body temperature", temp, "Cel"));
+            if (r.OxygenSaturation is { } spo2)
+                entries.Add(VitalEntry(patientId, r.Id, r.RecordedAt, "59408-5", "Oxygen saturation, pulse oximetry", spo2, "%"));
         }
 
         return Bundle(entries);
@@ -131,15 +153,15 @@ public static class FhirExportService
         };
     }
 
-    private static object VitalEntry<T>(string patientId, VitalsReading r, string loincCode, string display, T value, string unit)
+    private static object VitalEntry<T>(string patientId, int readingId, DateTime recordedAt, string loincCode, string display, T value, string unit)
     {
         return new
         {
-            fullUrl = $"urn:uuid:obs-{r.Id}-{loincCode}",
+            fullUrl = $"urn:uuid:obs-{readingId}-{loincCode}",
             resource = new
             {
                 resourceType = "Observation",
-                id = $"obs-{r.Id}-{loincCode}",
+                id = $"obs-{readingId}-{loincCode}",
                 meta = new { profile = new[] { "https://nrces.in/ndhm/fhir/r4/StructureDefinition/ObservationVitalSigns" } },
                 status = "final",
                 category = new[]
@@ -152,7 +174,7 @@ public static class FhirExportService
                     text = display
                 },
                 subject = new { reference = "urn:uuid:" + patientId },
-                effectiveDateTime = r.RecordedAt.ToString("yyyy-MM-ddTHH:mm:ssZ"),
+                effectiveDateTime = recordedAt.ToString("yyyy-MM-ddTHH:mm:ssZ"),
                 valueQuantity = new { value, unit, system = "http://unitsofmeasure.org", code = unit }
             }
         };

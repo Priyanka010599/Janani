@@ -53,6 +53,9 @@ public class UserProfile
     // user by guessing an id. Null until the user generates one in Settings.
     public string? DevicePairingToken { get; set; }
 
+    // See FhirExportService.IsValidAbhaId for the two accepted forms.
+    public string? AbhaId { get; set; }
+
     public int CurrentWeek =>
         Math.Min(40, Math.Max(1,
             (int)((DateOnly.FromDateTime(DateTime.Today).ToDateTime(TimeOnly.MinValue)

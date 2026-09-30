@@ -108,6 +108,61 @@ public class FhirExportServiceTests
         Assert.Equal(abha, identifier.GetProperty("value").GetString());
     }
 
+    // ── Maternal vitals bundle ───────────────────────────────────────────
+
+    [Fact]
+    public void MaternalVitalsBundle_UsesTheSameSourcedLoincCodes()
+    {
+        var user = new UserProfile { Id = 1, UserId = 1, Name = "Anjali" };
+        var reading = new PregnancyVitalsReading
+        {
+            Id = 7, UserId = 1, RecordedAt = new DateTime(2026, 9, 1, 8, 0, 0, DateTimeKind.Utc),
+            SystolicBp = 150, DiastolicBp = 95, HeartRate = 88, TemperatureC = 37.2m, OxygenSaturation = 97
+        };
+        var json = FhirExportService.BuildMaternalVitalsBundle(user, [reading]);
+        using var doc = JsonDocument.Parse(json);
+        var entries = doc.RootElement.GetProperty("entry").EnumerateArray().ToList();
+
+        var observations = entries
+            .Select(e => e.GetProperty("resource"))
+            .Where(r => r.GetProperty("resourceType").GetString() == "Observation")
+            .ToList();
+        Assert.Equal(5, observations.Count);
+
+        string LoincOf(string display) => observations
+            .Single(o => o.GetProperty("code").GetProperty("text").GetString() == display)
+            .GetProperty("code").GetProperty("coding")[0].GetProperty("code").GetString()!;
+
+        Assert.Equal("8480-6", LoincOf("Systolic blood pressure"));
+        Assert.Equal("8462-4", LoincOf("Diastolic blood pressure"));
+        Assert.Equal("8867-4", LoincOf("Heart rate"));
+        Assert.Equal("8310-5", LoincOf("Body temperature"));
+        Assert.Equal("59408-5", LoincOf("Oxygen saturation, pulse oximetry"));
+    }
+
+    [Fact]
+    public void MaternalVitalsBundle_SkipsNullReadings_RatherThanFabricatingAValue()
+    {
+        var user = new UserProfile { Id = 1, UserId = 1, Name = "Anjali" };
+        var reading = new PregnancyVitalsReading { Id = 7, UserId = 1, SystolicBp = 150 };
+        var json = FhirExportService.BuildMaternalVitalsBundle(user, [reading]);
+        using var doc = JsonDocument.Parse(json);
+        var observationCount = doc.RootElement.GetProperty("entry").EnumerateArray()
+            .Count(e => e.GetProperty("resource").GetProperty("resourceType").GetString() == "Observation");
+        Assert.Equal(1, observationCount);
+    }
+
+    [Fact]
+    public void MaternalVitalsBundle_WithAbha_IncludesPatientIdentifier()
+    {
+        var user = new UserProfile { Id = 1, UserId = 1, Name = "Anjali", AbhaId = "12345678901234" };
+        var json = FhirExportService.BuildMaternalVitalsBundle(user, []);
+        using var doc = JsonDocument.Parse(json);
+        var identifier = doc.RootElement.GetProperty("entry")[0].GetProperty("resource").GetProperty("identifier")[0];
+        Assert.Equal("https://healthid.ndhm.gov.in", identifier.GetProperty("system").GetString());
+        Assert.Equal("12345678901234", identifier.GetProperty("value").GetString());
+    }
+
     // ── Infant immunization bundle ───────────────────────────────────────
 
     [Fact]

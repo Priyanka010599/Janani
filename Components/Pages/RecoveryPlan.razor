@@ -6,6 +6,7 @@
 @inject AppDbContext Db
 @inject CurrentUserService CurrentUser
 @inject UserProfileCache ProfileCache
+@inject IJSRuntime JS
 @rendermode InteractiveServer
 
 <PageTitle>Janani — Recovery Plan</PageTitle>
@@ -25,6 +26,20 @@
     }
     else
     {
+        <div class="plan-card">
+            <h3>🪪 @T("AbhaSectionTitle")</h3>
+            <p class="sos-hint">@T("AbhaSectionHint")</p>
+            <div class="form-row">
+                <input @bind="_abhaInput" placeholder="@T("AbhaPlaceholder")" />
+            </div>
+            @if (_abhaError != null) { <p class="medicine-explanation-error">@_abhaError</p> }
+            <button class="bloom-btn secondary small-btn" @onclick="SaveAbhaAsync">@T("Save")</button>
+            @if (_abhaSaved) { <span class="sos-hint">✅ @T("Saved")</span> }
+            <div class="export-actions no-print" style="margin-top: 0.5rem;">
+                <button class="bloom-btn secondary" @onclick="DownloadFhirAsync">🪪 @T("DownloadFhir")</button>
+            </div>
+        </div>
+
         <div class="plan-card urgent-card">
             <h3>🚩 @T("RedFlagsTitle")</h3>
             <p class="sos-hint">@T("RedFlagsHint")</p>
@@ -110,6 +125,9 @@
     private List<AskYourDoctorPrompt> _doctorPrompts = [];
     private HashSet<string> _completedKeys = [];
     private List<HbncVisitSchedule.VisitWithStatus> _hbncVisits = [];
+    private string _abhaInput = string.Empty;
+    private string? _abhaError;
+    private bool _abhaSaved;
 
     protected override async Task OnInitializedAsync()
     {
@@ -117,6 +135,7 @@
         var profile = await ProfileCache.GetAsync();
         _language = (profile?.Language ?? AppLanguage.English).ToString();
         _postpartumDay = profile?.PostpartumDay;
+        _abhaInput = profile?.AbhaId ?? string.Empty;
 
         if (_postpartumDay == null) return;
 
@@ -165,6 +184,39 @@
             .Select(c => new { c.ItemKey, c.CompletedAt })
             .ToListAsync()).ToDictionary(c => c.ItemKey, c => c.CompletedAt);
         _hbncVisits = HbncVisitSchedule.BuildStatus(_postpartumDay, completedAtByKey);
+    }
+
+    private async Task SaveAbhaAsync()
+    {
+        var abha = string.IsNullOrWhiteSpace(_abhaInput) ? null : _abhaInput.Trim();
+        if (!FhirExportService.IsValidAbhaId(abha))
+        {
+            _abhaError = T("AbhaInvalid");
+            _abhaSaved = false;
+            return;
+        }
+        _abhaError = null;
+
+        await Db.UserProfiles.Where(p => p.UserId == _userId)
+            .ExecuteUpdateAsync(s => s.SetProperty(p => p.AbhaId, abha));
+        ProfileCache.Invalidate();
+        _abhaSaved = true;
+    }
+
+    private async Task DownloadFhirAsync()
+    {
+        var profile = await Db.UserProfiles.AsNoTracking().FirstOrDefaultAsync(p => p.UserId == _userId);
+        if (profile == null) return;
+
+        var readings = await Db.PregnancyVitalsReadings.AsNoTracking()
+            .Where(r => r.UserId == _userId)
+            .OrderByDescending(r => r.RecordedAt)
+            .Take(20)
+            .ToListAsync();
+
+        var json = FhirExportService.BuildMaternalVitalsBundle(profile, readings);
+        var filename = $"{profile.Name.Replace(' ', '-')}-fhir-vitals-{DateTime.UtcNow:yyyyMMdd}.json";
+        await JS.InvokeVoidAsync("downloadTextFile", filename, json, "application/fhir+json");
     }
 
     private string HbncStatusLabel(HbncVisitStatus status) => status switch
@@ -228,6 +280,13 @@
             ["CategoryBladderBowel"] = "Bladder & Bowel",
             ["CategoryNutritionSleep"] = "Nutrition & Sleep",
             ["CategoryMentalHealth"] = "Mental Health",
+            ["AbhaSectionTitle"] = "ABHA ID",
+            ["AbhaSectionHint"] = "Optional. Lets a clinic link your records to your Ayushman Bharat Health Account.",
+            ["AbhaPlaceholder"] = "14-digit ABHA number or name@abdm",
+            ["AbhaInvalid"] = "That doesn't look like an ABHA number (14 digits) or address (name@abdm).",
+            ["Save"] = "Save",
+            ["Saved"] = "Saved",
+            ["DownloadFhir"] = "Download FHIR JSON",
         },
         ["Hindi"] = new()
         {
@@ -260,6 +319,13 @@
             ["CategoryBladderBowel"] = "मूत्राशय और मल त्याग",
             ["CategoryNutritionSleep"] = "पोषण और नींद",
             ["CategoryMentalHealth"] = "मानसिक स्वास्थ्य",
+            ["AbhaSectionTitle"] = "ABHA ID",
+            ["AbhaSectionHint"] = "वैकल्पिक। इससे कोई क्लिनिक आपके रिकॉर्ड को आपके आयुष्मान भारत हेल्थ अकाउंट से जोड़ सकता है।",
+            ["AbhaPlaceholder"] = "14 अंकों की ABHA संख्या या name@abdm",
+            ["AbhaInvalid"] = "यह ABHA नंबर (14 अंक) या पता (name@abdm) जैसा नहीं लगता।",
+            ["Save"] = "सहेजें",
+            ["Saved"] = "सहेजा गया",
+            ["DownloadFhir"] = "FHIR JSON डाउनलोड करें",
         },
         ["Telugu"] = new()
         {
@@ -292,6 +358,13 @@
             ["CategoryBladderBowel"] = "మూత్రాశయం & ప్రేగు",
             ["CategoryNutritionSleep"] = "పోషణ & నిద్ర",
             ["CategoryMentalHealth"] = "మానసిక ఆరోగ్యం",
+            ["AbhaSectionTitle"] = "ABHA ID",
+            ["AbhaSectionHint"] = "ఐచ్ఛికం. దీనితో ఒక క్లినిక్ మీ రికార్డులను మీ ఆయుష్మాన్ భారత్ హెల్త్ అకౌంట్‌తో లింక్ చేయగలదు.",
+            ["AbhaPlaceholder"] = "14 అంకెల ABHA నంబర్ లేదా name@abdm",
+            ["AbhaInvalid"] = "ఇది ABHA నంబర్ (14 అంకెలు) లేదా చిరునామా (name@abdm) లా లేదు.",
+            ["Save"] = "సేవ్ చేయండి",
+            ["Saved"] = "సేవ్ చేయబడింది",
+            ["DownloadFhir"] = "FHIR JSON డౌన్‌లోడ్ చేయండి",
         },
     };
 
